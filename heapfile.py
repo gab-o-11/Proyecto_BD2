@@ -16,7 +16,7 @@ class Heapfile:
         self.PAGE_HEADER_FORMAT = "iiii" #id, numero de registros, numero de registros activos, free list head
         self.filename=filename
         self.PAGE_SIZE=page_size
-        self.RECORD_FORMAT=record_format
+        self.RECORD_FORMAT=record_format+"i"
         self.RECORD_SIZE = struct.calcsize(record_format)
         self.FILE_HEADER_SIZE=struct.calcsize(self.FILE_HEADER_FORMAT)
         self.PAGE_HEADER_SIZE = struct.calcsize(self.PAGE_HEADER_FORMAT)
@@ -37,6 +37,7 @@ class Heapfile:
             data=f.read(self.FILE_HEADER_SIZE)            
             page_size, tot_pag, tot_reg, first_id=struct.unpack(self.FILE_HEADER_FORMAT, data)
             return page_size, tot_pag, tot_reg, first_id
+        
     def read_page_header(self,page_id):
         with open(self.filename, "rb") as f:
             f.seek(self.PAGE_SIZE*page_id)
@@ -62,7 +63,73 @@ class Heapfile:
 
         return new_page_id
 
+    def actualizar_file_header(self, añadir_pagina, añadir_registro):
+        with open(self.filename, "r+b") as f:
+            page_size, num_paginas, num_records, first_id=self.read_file_header()
+            if(añadir_pagina):
+                num_paginas+=1
+            if(añadir_registro):
+                num_records+=1
+            f.seek(0)
+            f.write(struct.pack(self.FILE_HEADER_FORMAT,self.PAGE_SIZE, num_paginas, num_records, 1))
 
+    def actualizar_page_header(self, page_id ,nuevo_registro, eliminar_registro, nuevo_free_list_head=-1):
+        with open(self.filename, "r+b") as f:
+            id, num_registros, num_activos, free_list=self.read_page_header(page_id)
+            if nuevo_registro:
+                num_registros+=1
+                num_activos+=1
+            if eliminar_registro:
+                num_activos-=1
+            if(nuevo_free_list_head!=-1):
+                free_list=nuevo_free_list_head
+            f.seek(page_id*self.PAGE_SIZE)
+            f.write(struct.pack(self.PAGE_HEADER_FORMAT, id, num_registros, num_activos, free_list))
             
-    
+        
+    def insert_sin_espacio(self, *registro):
+        with open(self.filename, "r+b") as f:
+            page_size, tot_pag, tot_reg, first_id=self.read_file_header()
+            for page_id in range(1,tot_pag+1):
+                id, num_reg, reg_act, free_list=self.read_page_header(page_id)
+                if num_reg<self.SLOT_PER_PAGE:
+                    f.seek(self.calcular_slot(page_id,num_reg))
+                    f.write(struct.pack(self.RECORD_FORMAT, *registro))
+                    self.actualizar_file_header(False, True)
+                    self.actualizar_page_header(page_id,True,False)
+                    return RID(page_id,num_reg)
+            new_page_id=self.new_page()
+            f.seek(self.calcular_slot(new_page_id,0))
+            f.write(struct.pack(self.RECORD_FORMAT, *registro))
+            self.actualizar_file_header(False,True)
+            self.actualizar_page_header(new_page_id, True,False)
+            return RID(new_page_id,0)
+
+    def insert(self, *registro):
+        with open(self.filename, "r+b") as f:
+            page_size, tot_pag, tot_reg, first_id = self.read_file_header()
+            for page_id in range(1, tot_pag + 1):
+                page_id_leido, num_reg, reg_act, free_list = self.read_page_header(page_id)
+                if free_list != -1:
+                    slot_id = free_list
+                    slot_offset = self.calcular_slot(page_id, slot_id)
+                    f.seek(slot_offset + self.RECORD_SIZE) 
+                    next_free = struct.unpack("i", f.read(4))[0]
+                    f.seek(slot_offset)
+                    f.write(struct.pack(self.RECORD_FORMAT, *registro,-1))
+                    self.actualizar_page_header(page_id, nuevo_registro=True, eliminar_registro=False, nuevo_free_list_head=next_free)
+                    self.actualizar_file_header(False, True)
+                    return RID(page_id, slot_id)
+            new_page_id = self.new_page()
+            slot_id = 0
+            slot_offset = self.calcular_slot(new_page_id, slot_id)
+            f.seek(slot_offset)
+            f.write(struct.pack(self.RECORD_FORMAT, *registro, -1))
+            self.actualizar_file_header(False, True)
+            self.actualizar_page_header(new_page_id, nuevo_registro=True, eliminar_registro=False)
+            return RID(new_page_id, slot_id)
+
+
+
+
 
