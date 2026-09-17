@@ -1,5 +1,6 @@
 from Scanner import Scanner, LexicalError
 from Tokens import TokenType
+from Nodes import Compare, Delete, Insert, Select
 
 
 class ParseError(Exception):
@@ -97,7 +98,7 @@ class Parser:
             self._expect(TokenType.BY, "BY")
             order_by = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
 
-        return ("select", tabla, columnas, condicion, group_by, order_by)
+        return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by)
 
 
     # insert -> INSERT INTO IDENTIFIER VALUES '(' value { ',' value } ')'
@@ -110,7 +111,7 @@ class Parser:
         while self._match(TokenType.COMMA):
             valores.append(self._value())
         self._expect(TokenType.RPAREN, "')'")
-        return ("insert", tabla, valores)
+        return Insert(tabla, valores)
 
     ## delete -> DELETE FROM IDENTIFIER WHERE condition
     def _delete(self):
@@ -118,7 +119,7 @@ class Parser:
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de la tabla").lexeme
         self._expect(TokenType.WHERE, "WHERE")
         condicion = self._condition()
-        return ("delete", tabla, condicion)
+        return Delete(tabla, condicion)
 
 
     ## condition -> IDENTIFIER comp_op value
@@ -128,8 +129,7 @@ class Parser:
         if self._match(*COMPARISON_OPS):
             operador = self.previous.lexeme
             valor = self._value()
-            return ("condition",columna,operador, valor)
-
+            return Compare(columna, operador, valor)
 
         raise ParseError(
             f"Línea {self.current.line}: se esperaba un símbolo de comparacion"
