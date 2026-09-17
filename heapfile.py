@@ -129,7 +129,41 @@ class Heapfile:
             self.actualizar_page_header(new_page_id, nuevo_registro=True, eliminar_registro=False)
             return RID(new_page_id, slot_id)
 
-
+    def delete(self, rid):
+                with open(self.filename, "r+b") as f:
+                    page_id, slot_id = rid.getter()
+                    slot_a_borrar = self.calcular_slot(page_id, slot_id)
+                    page_id_leido, num_reg, reg_act, free_list = self.read_page_header(page_id)
+                    if reg_act <= 0:
+                        raise ValueError("No hay registros activos")
+                    next_free = free_list
+                    f.seek(slot_a_borrar + self.RECORD_SIZE - struct.calcsize("i"))
+                    f.write(struct.pack("i", next_free))
+                    self.write_page_header(page_id, num_reg, reg_act - 1, slot_id)
+                    page_size, total_pages, total_records, first_id = self.read_file_header()
+                    if total_records > 0:
+                        self.write_file_header(page_size, total_pages, total_records - 1, first_id)
+                    return True
+    
+    def update(self, rid, nuevos_datos):
+        page_id, slot_id = rid.getter()
+        slot_offset = self.calcular_slot(page_id, slot_id)
+        with open(self.filename, "r+b") as f:
+            f.seek(slot_offset)
+            raw = f.read(self.RECORD_SIZE)
+            if len(raw) < self.RECORD_SIZE:
+                raise ValueError("RID no válido o slot vacío")
+            record = struct.unpack(self.RECORD_FORMAT, raw)
+            if record[-1] != -1:
+                raise ValueError("No se puede actualizar un slot libre")
+            data = record[:-1]
+            if len(nuevos_datos) != len(data):
+                raise ValueError("Hay menos campos de los")
+            f.seek(slot_offset)
+            f.write(struct.pack(self.RECORD_FORMAT, *nuevos_datos, -1))
+        return True
+    
+    
 
 
 
