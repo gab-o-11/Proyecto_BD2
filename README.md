@@ -16,7 +16,7 @@ Proyecto_BD2/
 │   ├── api/                    API REST (FastAPI)
 │   └── requirements.txt
 ├── frontend/                   interfaz (React + Vite)
-├── data/                       archivos binarios generados (ignorado por git)
+├── data/                       generador de datos y archivos generados (ignorados por git)
 └── README.md
 ```
 
@@ -47,3 +47,18 @@ npm run dev
 ```
 
 Interfaz en http://localhost:5173 (proxy `/api` hacia el backend en el puerto 8000).
+
+## Datos para benchmarks
+
+```
+python data/generate_data.py
+```
+
+Genera `records_N.csv` (`id,category,value`) y `details_N.csv`
+(`id,record_id,value`) en `data/generated/` para N = 1 000, 10 000 y
+100 000. Cada detalle referencia un registro; hay dos detalles por registro.
+La semilla predeterminada es 2026. Se pueden cambiar los tamaños, la semilla
+y la ruta con `--sizes`, `--seed` y `--output-dir`.
+
+El borrador del análisis está en `benchmarks/benchmark.ipynb`; sus mediciones
+están desactivadas hasta conectar las estructuras restantes.
