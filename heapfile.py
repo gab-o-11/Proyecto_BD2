@@ -85,25 +85,6 @@ class Heapfile:
                 free_list=nuevo_free_list_head
             f.seek(page_id*self.PAGE_SIZE)
             f.write(struct.pack(self.PAGE_HEADER_FORMAT, id, num_registros, num_activos, free_list))
-            
-        
-    def insert_sin_espacio(self, *registro):
-        with open(self.filename, "r+b") as f:
-            page_size, tot_pag, tot_reg, first_id=self.read_file_header()
-            for page_id in range(1,tot_pag+1):
-                id, num_reg, reg_act, free_list=self.read_page_header(page_id)
-                if num_reg<self.SLOT_PER_PAGE:
-                    f.seek(self.calcular_slot(page_id,num_reg))
-                    f.write(struct.pack(self.RECORD_FORMAT, *registro))
-                    self.actualizar_file_header(False, True)
-                    self.actualizar_page_header(page_id,True,False)
-                    return RID(page_id,num_reg)
-            new_page_id=self.new_page()
-            f.seek(self.calcular_slot(new_page_id,0))
-            f.write(struct.pack(self.RECORD_FORMAT, *registro))
-            self.actualizar_file_header(False,True)
-            self.actualizar_page_header(new_page_id, True,False)
-            return RID(new_page_id,0)
 
     def insert(self, *registro):
         with open(self.filename, "r+b") as f:
