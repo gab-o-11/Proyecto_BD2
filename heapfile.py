@@ -157,8 +157,26 @@ class Heapfile:
             f.write(struct.pack(self.RECORD_FORMAT, *nuevos_datos, -1))
         return True
 
-    
-    
+    def search(self, campo_index, valor_buscado):
+        resultados = []
+        with open(self.filename, "rb") as f:
+            page_size, total_pages, total_records, first_id = self.read_file_header()
+            for page_id in range(1, total_pages + 1):
+                page_id_leido, num_reg, reg_act, free_list = self.read_page_header(page_id)
+                for slot_id in range(num_reg):
+                    slot_offset = self.calcular_slot(page_id, slot_id)
+                    f.seek(slot_offset)
+                    raw = f.read(self.RECORD_SIZE)
+                    if len(raw) < self.RECORD_SIZE:
+                        continue
+                    record = struct.unpack(self.RECORD_FORMAT, raw)
+                    next_free = record[-1]
+                    if next_free != -1:
+                        continue
+                    data = record[:-1]
+                    if campo_index < len(data) and data[campo_index] == valor_buscado:
+                        resultados.append((RID(page_id, slot_id), data))
+        return resultados
 
 
 
