@@ -6,7 +6,10 @@ class RID:
     def __init__(self, page_id, slot_id):
         self.page_id=page_id
         self.slot_id=slot_id
-    
+
+    def getter(self):
+        return self.page_id, self.slot_id
+
     def __eq__(self, other):
         return self.page_id == other.page_id and self.slot_id == other.slot_id
 
@@ -17,7 +20,7 @@ class Heapfile:
         self.filename=filename
         self.PAGE_SIZE=page_size
         self.RECORD_FORMAT=record_format+"i"
-        self.RECORD_SIZE = struct.calcsize(record_format)
+        self.RECORD_SIZE = struct.calcsize(self.RECORD_FORMAT)
         self.FILE_HEADER_SIZE=struct.calcsize(self.FILE_HEADER_FORMAT)
         self.PAGE_HEADER_SIZE = struct.calcsize(self.PAGE_HEADER_FORMAT)
         self.SLOT_PER_PAGE=(page_size-self.PAGE_HEADER_SIZE)//self.RECORD_SIZE
@@ -29,7 +32,7 @@ class Heapfile:
                 f.write(b"\x00" * (self.PAGE_SIZE - self.FILE_HEADER_SIZE))
 
     def calcular_slot(self, page_id, slot_id):
-        return (self.PAGE_SIZE*page_id)+self.PAGE_HEADER_SIZE+(slot_id*se   lf.RECORD_SIZE)
+        return (self.PAGE_SIZE*page_id)+self.PAGE_HEADER_SIZE+(slot_id*self.RECORD_SIZE)
     
     def read_file_header(self):
         with open(self.filename,"rb") as f:
@@ -44,6 +47,16 @@ class Heapfile:
             data=f.read(self.PAGE_HEADER_SIZE)
             id, num_reg, reg_act, free_list=struct.unpack(self.PAGE_HEADER_FORMAT, data)
             return id, num_reg, reg_act, free_list
+
+    def write_file_header(self, page_size, total_pages, total_records, first_page_id):
+        with open(self.filename, "r+b") as f:
+            f.seek(0)
+            f.write(struct.pack(self.FILE_HEADER_FORMAT, page_size, total_pages, total_records, first_page_id))
+
+    def write_page_header(self, page_id, num_reg, reg_act, free_list_head):
+        with open(self.filename, "r+b") as f:
+            f.seek(page_id * self.PAGE_SIZE)
+            f.write(struct.pack(self.PAGE_HEADER_FORMAT, page_id, num_reg, reg_act, free_list_head))
         
     def new_page(self):
         with open(self.filename, "r+b") as f:
@@ -111,20 +124,20 @@ class Heapfile:
             return RID(new_page_id, slot_id)
 
     def delete(self, rid):
-                with open(self.filename, "r+b") as f:
-                    page_id, slot_id = rid.getter()
-                    slot_a_borrar = self.calcular_slot(page_id, slot_id)
-                    page_id_leido, num_reg, reg_act, free_list = self.read_page_header(page_id)
-                    if reg_act <= 0:
-                        raise ValueError("No hay registros activos")
-                    next_free = free_list
-                    f.seek(slot_a_borrar + self.RECORD_SIZE - struct.calcsize("i"))
-                    f.write(struct.pack("i", next_free))
-                    self.write_page_header(page_id, num_reg, reg_act - 1, slot_id)
-                    page_size, total_pages, total_records, first_id = self.read_file_header()
-                    if total_records > 0:
-                        self.write_file_header(page_size, total_pages, total_records - 1, first_id)
-                    return True
+        with open(self.filename, "r+b") as f:
+            page_id, slot_id = rid.getter()
+            slot_a_borrar = self.calcular_slot(page_id, slot_id)
+            page_id_leido, num_reg, reg_act, free_list = self.read_page_header(page_id)
+            if reg_act <= 0:
+                raise ValueError("No hay registros activos")
+            next_free = free_list
+            f.seek(slot_a_borrar + self.RECORD_SIZE - struct.calcsize("i"))
+            f.write(struct.pack("i", next_free))
+            self.write_page_header(page_id, num_reg, reg_act - 1, slot_id)
+            page_size, total_pages, total_records, first_id = self.read_file_header()
+            if total_records > 0:
+                self.write_file_header(page_size, total_pages, total_records - 1, first_id)
+            return True
     
     def update(self, rid, nuevos_datos):
         page_id, slot_id = rid.getter()
@@ -139,10 +152,11 @@ class Heapfile:
                 raise ValueError("No se puede actualizar un slot libre")
             data = record[:-1]
             if len(nuevos_datos) != len(data):
-                raise ValueError("Hay menos campos de los")
+                raise ValueError("Hay menos campos de los esperados")
             f.seek(slot_offset)
             f.write(struct.pack(self.RECORD_FORMAT, *nuevos_datos, -1))
         return True
+
     
     
 
