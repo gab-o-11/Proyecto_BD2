@@ -1,4 +1,4 @@
-from visitor import Visitor
+from Visitor import Visitor
 
 
 class SemanticError(Exception):

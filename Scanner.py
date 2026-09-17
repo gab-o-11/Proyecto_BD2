@@ -23,7 +23,7 @@ class Scanner:
         self.line = 1
 
 
-    ## Funciones para avanzar
+    ## Funciones para recorrer
     def _peek(self, offset: int = 0) -> str:
         pos = self.current + offset
         return self.source[pos] if pos < len(self.source) else ""

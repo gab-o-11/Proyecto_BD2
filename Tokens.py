@@ -24,7 +24,6 @@ class TokenType(Enum):
 
     ## Condicionales
 
-
     ## operadores y simbolos
     STAR = auto()
     COMMA = auto()
