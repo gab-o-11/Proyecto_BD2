@@ -21,6 +21,7 @@ class TokenType(Enum):
     BEGIN = auto()
     TRANSACTION = auto()
     END = auto()
+    USING = auto()
 
     ## Restricciones de columna (CREATE TABLE)
     PRIMARY = auto()
@@ -76,6 +77,7 @@ KEYWORDS = {
     "BEGIN": TokenType.BEGIN,
     "TRANSACTION": TokenType.TRANSACTION,
     "END": TokenType.END,
+    "USING": TokenType.USING,
     "FLOAT": TokenType.FLOAT_TYPE,
     "INT": TokenType.INT_TYPE,
     "VARCHAR": TokenType.VARCHAR_TYPE,

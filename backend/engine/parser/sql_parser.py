@@ -19,6 +19,8 @@ VALUE_TYPES = (TokenType.INT, TokenType.FLOAT, TokenType.STRING)
 
 AGGREGATE_FUNCS = ("COUNT", "SUM", "AVG", "MIN", "MAX")
 
+INDEX_KINDS = ("HASH", "BPLUS", "BPLUS_CLUSTERED")
+
 class Parser:
     def __init__(self, scanner: Scanner):
         self.scanner = scanner
@@ -171,7 +173,7 @@ class Parser:
         self._expect(TokenType.EQUAL, "'='")
         return (columna, self._value())
 
-    # create -> CREATE TABLE IDENTIFIER '(' column_def { ',' column_def } ')'
+    # create -> CREATE TABLE IDENTIFIER '(' column_def { ',' column_def } ')' [ USING IDENTIFIER ]
     def _create_table(self):
         self._expect(TokenType.TABLE, "TABLE")
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
@@ -181,7 +183,15 @@ class Parser:
             columnas.append(self._column_def())
         self._expect(TokenType.RPAREN, "')'")
         index_column = self._resolver_primary_key(columnas)
-        return CreateTable(tabla, columnas, index_column=index_column)
+        index_kind = None
+        if self._match(TokenType.USING):
+            token = self._expect(TokenType.IDENTIFIER, "tipo de índice (HASH, BPLUS o BPLUS_CLUSTERED)")
+            index_kind = token.lexeme.upper()
+            if index_kind not in INDEX_KINDS:
+                raise ParseError(
+                    f"Línea {token.line}: tipo de índice desconocido '{token.lexeme}'"
+                )
+        return CreateTable(tabla, columnas, index_column=index_column, index_kind=index_kind)
 
     # type       -> INT_TYPE | FLOAT_TYPE | VARCHAR_TYPE '(' INT ')'
     def _column_def(self):
