@@ -7,7 +7,7 @@ function TableItem({ table }) {
       <button className="tree-head" onClick={() => setOpen(!open)}>
         <span className="chev">{open ? '▾' : '▸'}</span>
         <span className="node-icon tbl" />
-        {table.name} <span className="muted">({table.rows})</span>
+        {table.name} <span className="muted">({table.rows})</span>{table.storage && <span className="muted"> · {table.storage}</span>}
       </button>
       {open && (
         <div className="tree-body">
