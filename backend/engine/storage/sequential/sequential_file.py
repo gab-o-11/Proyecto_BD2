@@ -226,3 +226,49 @@ class SequentialFile:
                 results.append(data)
             current = raw[-1]
         return results
+
+    def update(self, key, new_record):
+        new_record = tuple(new_record)
+        total_records, total_activos, total_eliminados, record_size, overflow_head = self.read_header()
+        if total_records == 0:
+            return False
+        seen = set()
+        for position in range(total_records):
+            raw = self.read_record(position)
+            if raw is None:
+                continue
+            data = raw[:-1]
+            next_pointer = raw[-1]
+            if self.is_deleted(data):
+                continue
+            if data[self.key_index] == key:
+                if len(new_record) != len(data):
+                    raise ValueError("No existe este registro")
+                if new_record[self.key_index] == key:
+                    self.write_record(position, new_record + (next_pointer,))
+                    return True
+                self.delete(key)
+                self.insert(new_record)
+                return True
+        current = overflow_head
+        while current != -1 and current not in seen:
+            seen.add(current)
+            raw = self.read_record(current)
+            if raw is None:
+                break
+            data = raw[:-1]
+            next_pointer = raw[-1]
+            if self.is_deleted(data):
+                current = next_pointer
+                continue
+            if data[self.key_index] == key:
+                if len(new_record) != len(data):
+                    raise ValueError("Formato de registro incorrecto")
+                if new_record[self.key_index] == key:
+                    self.write_record(current, new_record + (next_pointer,))
+                    return True
+                self.delete(key)
+                self.insert(new_record)
+                return True
+            current = next_pointer
+        return False
