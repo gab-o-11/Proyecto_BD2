@@ -70,6 +70,11 @@ KEYWORDS = {
     "BEGIN": TokenType.BEGIN,
     "TRANSACTION": TokenType.TRANSACTION,
     "END": TokenType.END,
+    "FLOAT": TokenType.FLOAT_TYPE,
+    "INT": TokenType.INT_TYPE,
+    "VARCHAR": TokenType.VARCHAR_TYPE,
+    "UPDATE": TokenType.UPDATE,
+
 }
 
 
