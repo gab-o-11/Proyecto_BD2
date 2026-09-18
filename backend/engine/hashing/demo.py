@@ -32,13 +32,26 @@ def demo_index():
     reopened.close()
 
 
+def _first(row):
+    return row[0]
+
+
+def _second(row):
+    return row[1]
+
+
+def _pedido_id(pair):
+    pedido = pair[1]
+    return pedido[0]
+
+
 def demo_group_by():
     ventas = [
         ("ana", 100), ("beto", 50), ("ana", 200), ("caro", 75),
         ("beto", 25), ("ana", 10), ("caro", 300), ("dora", 40),
     ]
-    specs = [("count", None), ("sum", lambda r: r[1]), ("max", lambda r: r[1])]
-    result = sorted(external_group_by(ventas, key_fn=lambda r: r[0], specs=specs, mem_budget=2))
+    specs = [("count", None), ("sum", _second), ("max", _second)]
+    result = sorted(external_group_by(ventas, key_fn=_first, specs=specs, mem_budget=2))
     print("group_by (mem_budget=2, fuerza spill):")
     for grupo, aggs in result:
         print("  ", grupo, "-> count,sum,max =", aggs)
@@ -48,8 +61,8 @@ def demo_join():
     clientes = [(1, "ana"), (2, "beto"), (3, "caro")]
     pedidos = [(10, 1), (11, 1), (12, 2), (13, 99)]
     joined = sorted(
-        grace_hash_join(clientes, pedidos, left_key=lambda r: r[0], right_key=lambda r: r[1], mem_budget=1),
-        key=lambda pair: pair[1][0],
+        grace_hash_join(clientes, pedidos, left_key=_first, right_key=_second, mem_budget=1),
+        key=_pedido_id,
     )
     print("grace_hash_join (mem_budget=1, fuerza spill/recursion):")
     for cliente, pedido in joined:
