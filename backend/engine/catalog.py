@@ -38,6 +38,7 @@ class StorageTable:
 
         self.is_clustered = index_kind == "BPLUS_CLUSTERED"
         key_type = self._key_type(index_field)
+        self.key_kind = key_type
         index_path = os.path.join(data_dir, name + "_" + index_field)
         if self.is_clustered:
             key_index = self._field_index(index_field)
@@ -150,6 +151,41 @@ class StorageTable:
                 continue
             result.append(self._to_dict(pair, data))
         return result
+
+    def search_range(self, op, value):
+        if self.key_kind not in ("int", "float"):
+            return None
+        if self.index_kind == "HASH":
+            return None
+        if op in (">", ">="):
+            low = value
+            high = float("inf")
+        else:
+            low = float("-inf")
+            high = value
+        idx = self._field_index(self.index_field)
+        result = []
+        for pair, data in self._range_pairs(low, high):
+            key = data[idx]
+            if op == ">" and key == value:
+                continue
+            if op == "<" and key == value:
+                continue
+            result.append(self._to_dict(pair, data))
+        return result
+
+    def _range_pairs(self, low, high):
+        pares = []
+        if self.is_clustered:
+            for key, fields in self.index.range_search(low, high):
+                pares.append((key, fields))
+            return pares
+        for key, pair in self.index.range_search(low, high):
+            data = heap_fetch(self.heap, pair)
+            if data is None:
+                continue
+            pares.append((as_pair(pair), data))
+        return pares
 
     def remove(self, rows):
         count = 0
