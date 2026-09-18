@@ -15,6 +15,7 @@ class SequentialFile:
         self.waste_threshold = waste_threshold
         self.reorg_floor = 4
         self.reorganizations = 0
+        self._tails = {}
 
         self.RECORD_WITH_POINTER_FORMAT = self.RECORD_FORMAT + "ii"
         self.SLOT_SIZE = struct.calcsize(self.RECORD_WITH_POINTER_FORMAT)
@@ -117,6 +118,19 @@ class SequentialFile:
         wasted = deleted_count + (total_slots - main_count)
         return wasted > self.waste_threshold * total_slots
 
+    def _tail_ok(self, gap, key):
+        pos = self._tails.get(gap)
+        if pos is None:
+            return False
+        slot = self.read_record(pos)
+        if slot is None:
+            return False
+        if self._next(slot) != -1:
+            return False
+        if slot[self.key_index] > key:
+            return False
+        return True
+
     def insert(self, record):
         record = tuple(record)
         main_count, total_slots, deleted_count, record_size, overflow_head = self.read_header()
@@ -125,6 +139,20 @@ class SequentialFile:
 
         right = self._bisect_right_main(key, main_count)
         gap = right - 1
+
+        if self._tail_ok(gap, key):
+            tail_pos = self._tails[gap]
+            self._append_slot(new_position, record + (-1, 0))
+            tail_slot = self.read_record(tail_pos)
+            self.write_record(tail_pos, self._fields(tail_slot) + (new_position, self._deleted(tail_slot)))
+            total_slots += 1
+            self.write_header(main_count, total_slots, deleted_count, self.SLOT_SIZE, overflow_head)
+            self._tails[gap] = new_position
+            if self._should_reorganize(main_count, total_slots, deleted_count):
+                self.reorganize()
+                return self._find_position(key)
+            return new_position
+
         if gap < 0:
             chain_head = overflow_head
         else:
@@ -153,6 +181,9 @@ class SequentialFile:
 
         total_slots += 1
         self.write_header(main_count, total_slots, deleted_count, self.SLOT_SIZE, overflow_head)
+
+        if current == -1:
+            self._tails[gap] = new_position
 
         if self._should_reorganize(main_count, total_slots, deleted_count):
             self.reorganize()
@@ -186,6 +217,7 @@ class SequentialFile:
         records = self.scan()
         self._write_sorted(records)
         self.reorganizations += 1
+        self._tails = {}
 
     def bulk_load(self, records):
         combined = self.scan()
@@ -194,6 +226,7 @@ class SequentialFile:
         combined.sort(key=operator.itemgetter(self.key_index))
         self._write_sorted(combined)
         self.reorganizations += 1
+        self._tails = {}
 
     def _walk_chain(self, start, out):
         current = start
