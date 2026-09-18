@@ -1,6 +1,6 @@
 from Scanner import Scanner, LexicalError
 from Tokens import TokenType
-from Nodes import Compare, Delete, Insert, Select
+from Nodes import BeginTransaction, Compare, Delete, EndTransaction, Insert, Select
 
 
 class ParseError(Exception):
@@ -67,6 +67,12 @@ class Parser:
             return self._insert()
         if self._match(TokenType.DELETE):
             return self._delete()
+        if self._match(TokenType.BEGIN):
+            self._expect(TokenType.TRANSACTION, "TRANSACTION")
+            return BeginTransaction()
+        if self._match(TokenType.END):
+            self._expect(TokenType.TRANSACTION, "TRANSACTION")
+            return EndTransaction()
         raise ParseError(
             f"Línea {self.current.line}: se esperaba SELECT, INSERT o DELETE, "
             f"se encontró '{self.current.lexeme}'"
@@ -138,9 +144,13 @@ class Parser:
 
     ## value -> INT | FLOAT | STRING
     def _value(self):
-        if self._match(*VALUE_TYPES):
-            return self.previous.lexeme
+        if self._match(TokenType.INT):
+            return int(self.previous.lexeme)
+        if self._match(TokenType.FLOAT):
+            return float(self.previous.lexeme)
+        if self._match(TokenType.STRING):
+            return self.previous.lexeme[1:-1]
         raise ParseError(
-            f"Línea {self.current.line}: se esperaba un INT, FLOAT, STRING, "
+            f"Línea {self.current.line}: se esperaba un valor (número o cadena), "
             f"se encontró '{self.current.lexeme}'"
         )
