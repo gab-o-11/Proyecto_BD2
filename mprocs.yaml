@@ -1,0 +1,5 @@
+procs:
+  backend:
+    shell: "pnpm dev:backend"
+  frontend:
+    shell: "pnpm dev:frontend"
