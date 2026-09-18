@@ -1,6 +1,6 @@
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import BeginTransaction, Compare, Delete, EndTransaction, Insert, Select
+from .nodes import BeginTransaction, ColumnDef, Compare, CreateTable, Delete,EndTransaction, Insert, Select, Update
 
 
 class ParseError(Exception):
@@ -48,7 +48,6 @@ class Parser:
             f"se encontró '{self.current.lexeme}'"
         )
 
-
     # program -> statement { ';' statement } [ ';' ] EOF
     def parse_program(self):
         sentencias = [self._statement()]
@@ -59,7 +58,7 @@ class Parser:
         self._expect(TokenType.EOF, "';' o fin de la consulta")
         return sentencias
 
-    # statement -> select | insert | delete
+    # statement -> select | insert | delete | update | create | begin_tx | end_tx
     def _statement(self):
         if self._match(TokenType.SELECT):
             return self._select()
@@ -67,6 +66,10 @@ class Parser:
             return self._insert()
         if self._match(TokenType.DELETE):
             return self._delete()
+        if self._match(TokenType.CREATE):
+            return self._create_table()
+        if self._match(TokenType.UPDATE):
+            return self._update()
         if self._match(TokenType.BEGIN):
             self._expect(TokenType.TRANSACTION, "TRANSACTION")
             return BeginTransaction()
@@ -119,7 +122,7 @@ class Parser:
         self._expect(TokenType.RPAREN, "')'")
         return Insert(tabla, valores)
 
-    ## delete -> DELETE FROM IDENTIFIER WHERE condition
+    # delete -> DELETE FROM IDENTIFIER WHERE condition
     def _delete(self):
         self._expect(TokenType.FROM, "FROM")
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de la tabla").lexeme
@@ -127,8 +130,51 @@ class Parser:
         condicion = self._condition()
         return Delete(tabla, condicion)
 
+    # update -> UPDATE IDENTIFIER SET assignment { ',' assignment } [ WHERE condition ]
+    def _update(self):
+        tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
+        self._expect(TokenType.SET, "SET")
+        asignaciones = [self._assignment()]
+        while self._match(TokenType.COMMA):
+            asignaciones.append(self._assignment())
+        condicion = self._condition() if self._match(TokenType.WHERE) else None
+        return Update(tabla, asignaciones, condicion)
 
-    ## condition -> IDENTIFIER comp_op value
+    # assignment -> IDENTIFIER '=' value
+    def _assignment(self):
+        columna = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
+        self._expect(TokenType.EQUAL, "'='")
+        return (columna, self._value())
+
+    # create -> CREATE TABLE IDENTIFIER '(' column_def { ',' column_def } ')'
+    def _create_table(self):
+        self._expect(TokenType.TABLE, "TABLE")
+        tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
+        self._expect(TokenType.LPAREN, "'('")
+        columnas = [self._column_def()]
+        while self._match(TokenType.COMMA):
+            columnas.append(self._column_def())
+        self._expect(TokenType.RPAREN, "')'")
+        return CreateTable(tabla, columnas)
+
+    # column_def -> IDENTIFIER ( INT_TYPE | FLOAT_TYPE | VARCHAR_TYPE '(' INT ')' )
+    def _column_def(self):
+        nombre = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
+        if self._match(TokenType.INT_TYPE):
+            return ColumnDef(nombre, "INT")
+        if self._match(TokenType.FLOAT_TYPE):
+            return ColumnDef(nombre, "FLOAT")
+        if self._match(TokenType.VARCHAR_TYPE):
+            self._expect(TokenType.LPAREN, "'('")
+            tam = int(self._expect(TokenType.INT, "tamaño del VARCHAR").lexeme)
+            self._expect(TokenType.RPAREN, "')'")
+            return ColumnDef(nombre, "VARCHAR", tam)
+        raise ParseError(
+            f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT o VARCHAR), "
+            f"se encontró '{self.current.lexeme}'"
+        )
+
+    # condition -> IDENTIFIER comp_op value
     def _condition(self):
         columna = self._expect(TokenType.IDENTIFIER, "nombre de la tabla").lexeme
 
@@ -142,7 +188,7 @@ class Parser:
             f"se encontró '{self.current.lexeme}'"
         )
 
-    ## value -> INT | FLOAT | STRING
+    # value -> INT | FLOAT | STRING
     def _value(self):
         if self._match(TokenType.INT):
             return int(self.previous.lexeme)

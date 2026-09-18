@@ -15,6 +15,12 @@ class Visitor(ABC):
     def visit_BeginTransaction(self, node): ...
     @abstractmethod
     def visit_EndTransaction(self, node): ...
+    @abstractmethod
+    def visit_CreateTable(self, node): ...
+    @abstractmethod
+    def visit_ColumnDef(self, node): ...
+    @abstractmethod
+    def visit_Update(self, node): ...
 
 class PrintVisitor(Visitor):
     def render(self, sentencias) -> str:
@@ -50,3 +56,18 @@ class PrintVisitor(Visitor):
 
     def visit_EndTransaction(self, node):
         return "END TRANSACTION"
+
+    def visit_CreateTable(self, node):
+        columnas = ", ".join(c.accept(self) for c in node.columns)
+        return f"CREATE TABLE {node.table} ({columnas})"
+
+    def visit_ColumnDef(self, node):
+        tam = f"({node.size})" if node.size is not None else ""
+        return f"{node.name} {node.type}{tam}"
+
+    def visit_Update(self, node):
+        asignaciones = ", ".join(f"{c} = {self._literal(v)}" for c, v in node.assignments)
+        sql = f"UPDATE {node.table} SET {asignaciones}"
+        if node.where is not None:
+            sql += " WHERE " + node.where.accept(self)
+        return sql
