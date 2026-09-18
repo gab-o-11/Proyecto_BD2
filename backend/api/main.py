@@ -39,6 +39,10 @@ def _tipo(sentencia):
         return "insert"
     if nombre == "Delete":
         return "delete"
+    if nombre == "Update":
+        return "update"
+    if nombre == "CreateTable":
+        return "create"
     if nombre == "BeginTransaction":
         return "begin"
     if nombre == "EndTransaction":
@@ -77,7 +81,7 @@ def query(body: QueryBody):
     except Exception as error:
         return {"error": str(error), "plan": [], "statements": []}
 
-    executor = Executor(catalog, TransactionManager())
+    executor = Executor(catalog, TransactionManager(), DATA_DIR)
     salidas = executor.run(sentencias)
     elapsed = round((time.monotonic() - start) * 1000, 1)
 
