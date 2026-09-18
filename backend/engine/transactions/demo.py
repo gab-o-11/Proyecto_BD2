@@ -145,11 +145,16 @@ def main():
     safe_result = run_safe_demo()
 
     print("Escenario sin bloqueos")
+    print("Transacciones ejecutadas:", len(unsafe_result["transaction_ids"]))
     print("Resultado esperado:", unsafe_result["expected_value"])
     print("Resultado obtenido:", unsafe_result["final_value"])
-    print("Se produjo una actualización perdida")
+    print(
+        "Actualización perdida:",
+        unsafe_result["final_value"] != unsafe_result["expected_value"],
+    )
     print()
     print("Escenario con bloqueos")
+    print("Transacciones ejecutadas:", len(safe_result["transaction_ids"]))
     print("Resultado esperado:", safe_result["expected_value"])
     print("Resultado obtenido:", safe_result["final_value"])
     print("Espera detectada:", safe_result["wait_detected"])

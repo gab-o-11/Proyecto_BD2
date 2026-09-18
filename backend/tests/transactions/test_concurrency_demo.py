@@ -1,6 +1,8 @@
+from contextlib import redirect_stdout
+from io import StringIO
 import unittest
 
-from engine.transactions.demo import run_safe_demo, run_unsafe_demo
+from engine.transactions.demo import main, run_safe_demo, run_unsafe_demo
 
 
 class ConcurrencyDemoTest(unittest.TestCase):
@@ -29,6 +31,17 @@ class ConcurrencyDemoTest(unittest.TestCase):
             result = run_safe_demo()
             self.assertEqual(result["final_value"], 120)
             self.assertTrue(result["wait_detected"])
+
+    def test_console_output_shows_the_required_evidence(self):
+        output = StringIO()
+
+        with redirect_stdout(output):
+            main()
+
+        text = output.getvalue()
+        self.assertIn("Transacciones ejecutadas: 2", text)
+        self.assertIn("Actualización perdida: True", text)
+        self.assertIn("Espera detectada: True", text)
 
 
 if __name__ == "__main__":
