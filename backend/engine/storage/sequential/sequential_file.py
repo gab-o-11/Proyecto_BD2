@@ -64,7 +64,7 @@ class SequentialFile:
 
     def insert(self, record):
         record = tuple(record)
-        total_records, total_activos, total_eliminados, _, overflow_head = self.read_header()
+        total_records, total_activos, total_eliminados, record_size, overflow_head = self.read_header()
         new_position = total_records
         self.write_record(new_position, record + (overflow_head,))
         overflow_head = new_position
@@ -93,8 +93,19 @@ class SequentialFile:
     def tombstone(self, data):
         return tuple(self.convertir_a_vacio(v) for v in data)
 
+    def is_deleted(self, data):
+        if not data:
+            return False
+        return all(
+            (isinstance(v, str) and v == "") or
+            (isinstance(v, (bytes, bytearray)) and v == b"") or
+            (isinstance(v, float) and v == 0.0) or
+            (not isinstance(v, (str, bytes, bytearray, float)) and v == 0)
+            for v in data
+        )
+
     def delete(self, key):
-        total_records, total_activos, total_eliminados, _, overflow_head = self.read_header()
+        total_records, total_activos, total_eliminados, record_size, overflow_head = self.read_header()
         if total_records == 0:
             return False
 
@@ -116,7 +127,7 @@ class SequentialFile:
                     if previous_raw is not None:
                         previous_data = previous_raw[:-1]
                         self.write_record(previous_overflow, previous_data + (next_pointer,))
-                self.write_record(current_overflow, self._tombstone_record(data) + (-1,))
+                self.write_record(current_overflow, self.tombstone(data) + (-1,))
                 total_activos -= 1
                 total_eliminados += 1
                 self.write_header(
@@ -139,7 +150,7 @@ class SequentialFile:
                 continue
             data = raw[:-1]
             if data[self.key_index] == key:
-                self.write_record(position, self._tombstone_record(data) + (-1,))
+                self.write_record(position, self.tombstone(data) + (-1,))
                 total_activos -= 1
                 total_eliminados += 1
                 self.write_header(
@@ -151,3 +162,35 @@ class SequentialFile:
                 )
                 return True
         return False
+
+    def search(self, key):
+        total_records, total_activos, total_eliminados, record_size, overflow_head = self.read_header()
+        if total_records == 0:
+            return None
+        
+        seen = set()
+        for position in range(total_records):
+            raw = self.read_record(position)
+            if raw is None:
+                continue
+            data = raw[:-1]
+            if self.is_deleted(data):
+                continue
+            if position in seen:
+                continue
+            if data[self.key_index] == key:
+                return data
+        current = overflow_head
+        while current != -1 and current not in seen:
+            seen.add(current)
+            raw = self.read_record(current)
+            if raw is None:
+                break
+            data = raw[:-1]
+            if self.is_deleted(data):
+                current = raw[-1]
+                continue
+            if data[self.key_index] == key:
+                return data
+            current = raw[-1]
+        return None
