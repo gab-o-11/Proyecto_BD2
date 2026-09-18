@@ -26,7 +26,7 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <h1>MiniGestor BD2</h1>
-        <span className="db">— base de datos: minidb (mock)</span>
+        <span className="db">— base de datos: minidb</span>
       </header>
       <div className="layout">
         <FilesPanel tables={tables} />
