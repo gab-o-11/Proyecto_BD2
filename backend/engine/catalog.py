@@ -1,4 +1,5 @@
 import os
+import json
 
 from engine.storage.heap.heapfile import Heapfile
 from engine.storage.sequential.sequential_file import SequentialFile
@@ -10,12 +11,14 @@ from engine.common.heap_adapter import heap_fetch, to_heap_rid
 STRLEN = 32
 PAGE_SIZE = 4096
 BLOCK_FACTOR = 32
+TABLE_SUFFIX = ".tbl"
 
 
 class StorageTable:
     def __init__(self, name, schema, data_dir, index_field, index_kind):
         self.name = name
         self.schema = schema
+        self.data_dir = data_dir
         self.index_field = index_field
         self.index_column = index_field
         self.index_kind = index_kind
@@ -50,6 +53,21 @@ class StorageTable:
             else:
                 self.index = BPlusTree(index_path, key_type=key_type, block_factor=BLOCK_FACTOR)
             self.seq = None
+        self._write_descriptor()
+
+    def _write_descriptor(self):
+        columnas = []
+        for col, col_type in self.schema:
+            columnas.append([col, col_type])
+        descriptor = {
+            "name": self.name,
+            "schema": columnas,
+            "index_field": self.index_field,
+            "index_kind": self.index_kind,
+        }
+        path = os.path.join(self.data_dir, self.name + TABLE_SUFFIX)
+        with open(path, "w") as f:
+            json.dump(descriptor, f)
 
     def _field_index(self, field):
         for i in range(len(self.schema)):
@@ -216,10 +234,36 @@ def _seed_productos(tabla):
         })
 
 
+def _load_tables(data_dir):
+    catalogo = {}
+    nombres = os.listdir(data_dir)
+    nombres.sort()
+    for archivo in nombres:
+        if not archivo.endswith(TABLE_SUFFIX):
+            continue
+        with open(os.path.join(data_dir, archivo)) as f:
+            descriptor = json.load(f)
+        schema = []
+        for par in descriptor["schema"]:
+            schema.append((par[0], par[1]))
+        tabla = StorageTable(
+            descriptor["name"],
+            schema,
+            data_dir,
+            descriptor["index_field"],
+            descriptor["index_kind"],
+        )
+        catalogo[descriptor["name"]] = tabla
+    return catalogo
+
+
 def create_catalog(data_dir):
-    fresh = not os.path.exists(data_dir)
-    if fresh:
+    if not os.path.exists(data_dir):
         os.makedirs(data_dir)
+
+    existentes = _load_tables(data_dir)
+    if existentes:
+        return existentes
 
     clientes = StorageTable(
         "clientes",
@@ -242,9 +286,11 @@ def create_catalog(data_dir):
         index_field="id",
         index_kind="BPLUS_CLUSTERED",
     )
-    if fresh:
+    if clientes.count() == 0:
         _seed_clientes(clientes)
+    if ventas.count() == 0:
         _seed_ventas(ventas)
+    if productos.count() == 0:
         _seed_productos(productos)
     return {"clientes": clientes, "ventas": ventas, "productos": productos}
 
