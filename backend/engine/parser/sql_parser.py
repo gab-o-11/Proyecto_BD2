@@ -17,6 +17,8 @@ COMPARISON_OPS = (
 
 VALUE_TYPES = (TokenType.INT, TokenType.FLOAT, TokenType.STRING)
 
+AGGREGATE_FUNCS = ("COUNT", "SUM", "AVG", "MIN", "MAX")
+
 class Parser:
     def __init__(self, scanner: Scanner):
         self.scanner = scanner
@@ -81,14 +83,19 @@ class Parser:
             f"se encontró '{self.current.lexeme}'"
         )
 
-    # select -> SELECT columns FROM IDENTIFIER [ where ] [ group ] [ order ]
+    # select -> SELECT select_list FROM IDENTIFIER [ where ] [ group ] [ order ]
     def _select(self):
         if self._match(TokenType.STAR):
             columnas = None
+            agregados = None
         else:
-            columnas = [self._expect(TokenType.IDENTIFIER, "'*' o nombre de columna").lexeme]
+            columnas = []
+            agregados = []
+            self._select_item(columnas, agregados)
             while self._match(TokenType.COMMA):
-                columnas.append(self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme)
+                self._select_item(columnas, agregados)
+            if not agregados:
+                agregados = None
 
         self._expect(TokenType.FROM, "FROM")
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
@@ -107,7 +114,25 @@ class Parser:
             self._expect(TokenType.BY, "BY")
             order_by = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
 
-        return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by)
+        return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by, aggregates=agregados)
+
+    # select_item -> IDENTIFIER '(' ( '*' | IDENTIFIER ) ')' | IDENTIFIER
+    def _select_item(self, columnas, agregados):
+        nombre = self._expect(TokenType.IDENTIFIER, "'*' o nombre de columna").lexeme
+        if not self._match(TokenType.LPAREN):
+            columnas.append(nombre)
+            return
+        func = nombre.upper()
+        if func not in AGGREGATE_FUNCS:
+            raise ParseError(
+                f"Línea {self.current.line}: función de agregación desconocida '{nombre}'"
+            )
+        if self._match(TokenType.STAR):
+            arg = None
+        else:
+            arg = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
+        self._expect(TokenType.RPAREN, "')'")
+        agregados.append((func.lower(), arg))
 
 
     # insert -> INSERT INTO IDENTIFIER VALUES '(' value { ',' value } ')'

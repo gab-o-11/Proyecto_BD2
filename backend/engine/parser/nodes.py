@@ -18,6 +18,7 @@ class Select(Node):
     where: Optional[Compare] = None
     group_by: Optional[str] = None
     order_by: Optional[str] = None
+    aggregates: Optional[List[tuple]] = None
 
 @dataclass
 class Insert(Node):
