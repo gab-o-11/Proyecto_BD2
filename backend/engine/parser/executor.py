@@ -51,8 +51,32 @@ class Executor(Visitor):
                 continue
             for linea in self.plan:
                 print(f"  plan: {linea}")
-            if resultado is not None:
-                self._imprimir(resultado)
+            if resultado is None:
+                continue
+            if "message" in resultado:
+                print("  " + resultado["message"])
+            else:
+                self._imprimir(resultado["columns"], resultado["rows"])
+
+    def run(self, sentencias):
+        salidas = []
+        for sentencia in sentencias:
+            self.plan = []
+            try:
+                resultado = sentencia.accept(self)
+            except SemanticError as e:
+                salidas.append({"error": str(e), "plan": list(self.plan)})
+                continue
+            salida = {"plan": list(self.plan)}
+            if resultado is None:
+                salida["message"] = "OK"
+            elif "message" in resultado:
+                salida["message"] = resultado["message"]
+            else:
+                salida["columns"] = resultado["columns"]
+                salida["rows"] = resultado["rows"]
+            salidas.append(salida)
+        return salidas
 
     def _tabla(self, nombre):
         if nombre not in self.catalog:
@@ -75,15 +99,15 @@ class Executor(Visitor):
             )
         tabla.insert(dict(zip(tabla.columns, node.values)))
         self.plan.append(f"inserción en '{tabla.name}'")
-        print(f"  1 fila insertada en '{tabla.name}'")
-        return None
+        return {"message": f"1 fila insertada en '{tabla.name}'"}
 
     def visit_Delete(self, node):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla)
         filas = self._filtrar(tabla, node.where)
-        print(f"  {tabla.remove(filas)} fila(s) eliminada(s) de '{tabla.name}'")
-        return None
+        eliminadas = tabla.remove(filas)
+        self.plan.append(f"eliminación en '{tabla.name}'")
+        return {"message": f"{eliminadas} fila(s) eliminada(s) de '{tabla.name}'"}
 
     def visit_Select(self, node):
         tabla = self._tabla(node.table)
@@ -107,7 +131,7 @@ class Executor(Visitor):
             filas.sort(key=lambda f: f[node.order_by])
             self.plan.append(f"ordenamiento por '{node.order_by}'")
 
-        return columnas, filas
+        return {"columns": columnas, "rows": filas}
 
     def _filtrar(self, tabla, where):
         if where is None:
@@ -128,8 +152,7 @@ class Executor(Visitor):
         raise SemanticError("las condiciones se evalúan dentro de _filtrar")
 
     @staticmethod
-    def _imprimir(resultado):
-        columnas, filas = resultado
+    def _imprimir(columnas, filas):
         print("  " + " | ".join(columnas))
         for fila in filas:
             print("  " + " | ".join(str(fila[c]) for c in columnas))
