@@ -80,3 +80,74 @@ class SequentialFile:
         )
 
         return new_position
+
+    def convertir_a_vacio(self, value):
+        if isinstance(value, (bytes, bytearray)):
+            return b""
+        if isinstance(value, str):
+            return ""
+        if isinstance(value, float):
+            return 0.0
+        return 0
+
+    def tombstone(self, data):
+        return tuple(self.convertir_a_vacio(v) for v in data)
+
+    def delete(self, key):
+        total_records, total_activos, total_eliminados, _, overflow_head = self.read_header()
+        if total_records == 0:
+            return False
+
+        previous_overflow = None
+        current_overflow = overflow_head
+        seen = set()
+        while current_overflow != -1 and current_overflow not in seen:
+            seen.add(current_overflow)
+            raw = self.read_record(current_overflow)
+            if raw is None:
+                break
+            data = raw[:-1]
+            next_pointer = raw[-1]
+            if data[self.key_index] == key:
+                if previous_overflow is None:
+                    overflow_head = next_pointer
+                else:
+                    previous_raw = self.read_record(previous_overflow)
+                    if previous_raw is not None:
+                        previous_data = previous_raw[:-1]
+                        self.write_record(previous_overflow, previous_data + (next_pointer,))
+                self.write_record(current_overflow, self._tombstone_record(data) + (-1,))
+                total_activos -= 1
+                total_eliminados += 1
+                self.write_header(
+                    total_records,
+                    total_activos,
+                    total_eliminados,
+                    self.RECORD_WITH_POINTER_SIZE,
+                    overflow_head,
+                )
+                return True
+            
+            previous_overflow = current_overflow
+            current_overflow = next_pointer
+
+        for position in range(total_records):
+            if position in seen:
+                continue
+            raw = self.read_record(position)
+            if raw is None:
+                continue
+            data = raw[:-1]
+            if data[self.key_index] == key:
+                self.write_record(position, self._tombstone_record(data) + (-1,))
+                total_activos -= 1
+                total_eliminados += 1
+                self.write_header(
+                    total_records,
+                    total_activos,
+                    total_eliminados,
+                    self.RECORD_WITH_POINTER_SIZE,
+                    overflow_head,
+                )
+                return True
+        return False
