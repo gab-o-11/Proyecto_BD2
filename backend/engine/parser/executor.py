@@ -144,3 +144,31 @@ class Executor(Visitor):
         self.en_transaccion = False
         self.plan.append("fin de transacción")
         return None
+
+    def visit_CreateTable(self, node):
+        if node.table in self.catalog:
+            raise SemanticError(f"la tabla '{node.table}' ya existe")
+        nombres = [c.name for c in node.columns]
+        if len(nombres) != len(set(nombres)):
+            raise SemanticError("hay columnas repetidas")
+        self.catalog[node.table] = Table(node.table, nombres,
+                                         index_column=node.index_column,
+                                         index_kind=node.index_kind)
+        self.plan.append(f"creación de la tabla '{node.table}'")
+        print(f"  tabla '{node.table}' creada con {len(nombres)} columnas")
+        return None
+
+    def visit_Update(self, node):
+        tabla = self._tabla(node.table)
+        for columna, _ in node.assignments:
+            self._columna(tabla, columna)
+        filas = self._filtrar(tabla, node.where)
+        for fila in filas:
+            for columna, valor in node.assignments:
+                fila[columna] = valor
+        self.plan.append(f"actualización de {len(filas)} fila(s)")
+        print(f"  {len(filas)} fila(s) actualizada(s) en '{tabla.name}'")
+        return None
+
+    def visit_ColumnDef(self, node):
+        return None
