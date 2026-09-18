@@ -89,6 +89,15 @@ class Executor(Visitor):
             raise SemanticError(f"la columna '{nombre}' no existe en '{tabla.name}'")
         return nombre
 
+    def _base(self, tabla):
+        clustered = getattr(tabla, "is_clustered", False)
+        if clustered:
+            return "sequential"
+        return "heap"
+
+    def _paso(self, op, method, detail, rows):
+        return {"op": op, "method": method, "detail": detail, "rows": rows}
+
     def visit_Insert(self, node):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla)
@@ -98,7 +107,7 @@ class Executor(Visitor):
                 f"y se dieron {len(node.values)} valores"
             )
         tabla.insert(dict(zip(tabla.columns, node.values)))
-        self.plan.append(f"inserción en '{tabla.name}'")
+        self.plan.append(self._paso("Insert", self._base(tabla), tabla.name, 1))
         return {"message": f"1 fila insertada en '{tabla.name}'"}
 
     def visit_Delete(self, node):
@@ -106,7 +115,7 @@ class Executor(Visitor):
         self._bloquear_tabla(tabla)
         filas = self._filtrar(tabla, node.where)
         eliminadas = tabla.remove(filas)
-        self.plan.append(f"eliminación en '{tabla.name}'")
+        self.plan.append(self._paso("Delete", "lazy", tabla.name, eliminadas))
         return {"message": f"{eliminadas} fila(s) eliminada(s) de '{tabla.name}'"}
 
     def visit_Select(self, node):
@@ -122,31 +131,49 @@ class Executor(Visitor):
             self._columna(tabla, node.group_by)
             grupos = {}
             for fila in filas:
-                grupos.setdefault(fila[node.group_by], []).append(fila)
-            self.plan.append(f"agrupación por '{node.group_by}' ({len(grupos)} grupos)")
-            filas = [{node.group_by: clave, "conteo": len(g)} for clave, g in grupos.items()]
+                clave = fila[node.group_by]
+                if clave not in grupos:
+                    grupos[clave] = []
+                grupos[clave].append(fila)
+            nuevas = []
+            for clave in grupos:
+                nuevas.append({node.group_by: clave, "conteo": len(grupos[clave])})
+            filas = nuevas
             columnas = [node.group_by, "conteo"]
+            self.plan.append(self._paso("Group By", "hash", node.group_by, len(filas)))
 
         if node.order_by is not None:
-            filas.sort(key=lambda f: f[node.order_by])
-            self.plan.append(f"ordenamiento por '{node.order_by}'")
+            ordenadas = sorted(filas, key=lambda f: f[node.order_by])
+            filas = ordenadas
+            self.plan.append(self._paso("Order By", "sort", node.order_by, len(filas)))
 
+        self.plan.append(self._paso("Project", ",".join(columnas), tabla.name, len(filas)))
         return {"columns": columnas, "rows": filas}
 
     def _filtrar(self, tabla, where):
         if where is None:
-            self.plan.append("recorrido completo (sin WHERE)")
-            return tabla.scan()
+            filas = tabla.scan()
+            self.plan.append(self._paso("Sequential Scan", self._base(tabla), tabla.name, len(filas)))
+            return filas
 
         self._columna(tabla, where.column)
 
         if where.op == "=" and where.column == tabla.index_column:
-            self.plan.append(f"búsqueda por índice {tabla.index_kind}({tabla.index_column})")
-            return tabla.search(where.column, where.value)
+            filas = tabla.search(where.column, where.value)
+            metodo = str(tabla.index_kind) + "(" + str(tabla.index_column) + ")"
+            detalle = str(where.column) + " = " + str(where.value)
+            self.plan.append(self._paso("Index Search", metodo, detalle, len(filas)))
+            return filas
 
-        self.plan.append("recorrido completo + filtro")
+        detalle = str(where.column) + " " + str(where.op) + " " + str(where.value)
         comparar = COMPARADORES[where.op]
-        return [f for f in tabla.scan() if comparar(f[where.column], where.value)]
+        todas = tabla.scan()
+        filas = []
+        for f in todas:
+            if comparar(f[where.column], where.value):
+                filas.append(f)
+        self.plan.append(self._paso("Sequential Scan + Filter", self._base(tabla), detalle, len(filas)))
+        return filas
 
     def visit_Compare(self, node):
         raise SemanticError("las condiciones se evalúan dentro de _filtrar")
@@ -163,7 +190,7 @@ class Executor(Visitor):
             self.transaction_manager.begin()
         except TransactionError as error:
             raise SemanticError(str(error)) from error
-        self.plan.append("inicio de transacción")
+        self.plan.append(self._paso("Begin", "transaction", "", 0))
         return None
 
     def visit_EndTransaction(self, node):
@@ -171,7 +198,7 @@ class Executor(Visitor):
             self.transaction_manager.end()
         except TransactionError as error:
             raise SemanticError(str(error)) from error
-        self.plan.append("fin de transacción")
+        self.plan.append(self._paso("End", "transaction", "", 0))
         return None
 
     def _bloquear_tabla(self, tabla):
