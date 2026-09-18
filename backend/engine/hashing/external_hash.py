@@ -49,9 +49,13 @@ def _acc_step(op, acc, value):
     if op == "sum":
         return acc + value
     if op == "min":
-        return value if acc is None or value < acc else acc
+        if acc is None or value < acc:
+            return value
+        return acc
     if op == "max":
-        return value if acc is None or value > acc else acc
+        if acc is None or value > acc:
+            return value
+        return acc
     acc[0] += value
     acc[1] += 1
     return acc
@@ -59,7 +63,9 @@ def _acc_step(op, acc, value):
 
 def _acc_final(op, acc):
     if op == "avg":
-        return acc[0] / acc[1] if acc[1] else None
+        if acc[1] == 0:
+            return None
+        return acc[0] / acc[1]
     return acc
 
 
@@ -69,10 +75,17 @@ def _aggregate(rows, key_fn, specs):
         key = key_fn(row)
         accs = table.get(key)
         if accs is None:
-            accs = [_acc_init(op) for op, _ in specs]
+            accs = []
+            for op, extractor in specs:
+                accs.append(_acc_init(op))
             table[key] = accs
-        for i, (op, extractor) in enumerate(specs):
-            value = None if extractor is None else extractor(row)
+        for i in range(len(specs)):
+            op = specs[i][0]
+            extractor = specs[i][1]
+            if extractor is None:
+                value = None
+            else:
+                value = extractor(row)
             accs[i] = _acc_step(op, accs[i], value)
     return table
 
@@ -89,8 +102,14 @@ def external_group_by(rows, key_fn, specs, mem_budget=1000, num_partitions=16, t
             spilled = True
             break
     if not spilled:
-        for key, accs in _aggregate(buffered, key_fn, specs).items():
-            yield key, [_acc_final(op, acc) for (op, _), acc in zip(specs, accs)]
+        table = _aggregate(buffered, key_fn, specs)
+        for key in table:
+            accs = table[key]
+            row_out = []
+            for i in range(len(specs)):
+                op = specs[i][0]
+                row_out.append(_acc_final(op, accs[i]))
+            yield key, row_out
         return
     parts = _spill(chain(buffered, rows), key_fn, num_partitions, hash_bits, tmp_dir)
     for path in parts:
@@ -112,10 +131,15 @@ def _distinct_within(path, key_fn, limit):
 def _join_partition(left_path, right_path, left_key, right_key):
     build = {}
     for row in _read_pickles(left_path):
-        build.setdefault(left_key(row), []).append(row)
+        key = left_key(row)
+        if key not in build:
+            build[key] = []
+        build[key].append(row)
     for right_row in _read_pickles(right_path):
-        for left_row in build.get(right_key(right_row), ()):
-            yield left_row, right_row
+        key = right_key(right_row)
+        if key in build:
+            for left_row in build[key]:
+                yield left_row, right_row
 
 
 def grace_hash_join(left, right, left_key, right_key, mem_budget=1000, num_partitions=16, tmp_dir=None, hash_bits=0):
