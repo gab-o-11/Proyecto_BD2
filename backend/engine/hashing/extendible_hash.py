@@ -52,7 +52,10 @@ class ExtendibleHashIndex:
         return stable_hash(key, self.key_type) & ((1 << self.global_depth) - 1)
 
     def _can_split(self, bucket):
-        return len({stable_hash(k, self.key_type) for k, _ in bucket.entries}) > 1
+        hashes = set()
+        for key, rid in bucket.entries:
+            hashes.add(stable_hash(key, self.key_type))
+        return len(hashes) > 1
 
     def _double_directory(self):
         self.directory = self.directory + list(self.directory)
@@ -122,13 +125,14 @@ class ExtendibleHashIndex:
         removed = False
         while page_id != -1:
             bucket = self._read_bucket(page_id)
-            before = len(bucket.entries)
-            bucket.entries = [
-                (k, r) for k, r in bucket.entries
-                if not (k == key and (rid is None or r == rid))
-            ]
-            if len(bucket.entries) != before:
-                removed = True
+            kept = []
+            for k, r in bucket.entries:
+                if k == key and (rid is None or r == rid):
+                    removed = True
+                else:
+                    kept.append((k, r))
+            if len(kept) != len(bucket.entries):
+                bucket.entries = kept
                 self._write_bucket(page_id, bucket)
             page_id = bucket.overflow_ptr
         return removed
