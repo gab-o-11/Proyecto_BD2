@@ -1,5 +1,6 @@
 import operator
 from .visitor import Visitor
+from ..transactions import Resource, TransactionError, TransactionManager
 
 class SemanticError(Exception):
     pass
@@ -35,10 +36,10 @@ class Table:
 
 
 class Executor(Visitor):
-    def __init__(self, catalog=None):
+    def __init__(self, catalog=None, transaction_manager=None):
         self.catalog = catalog if catalog is not None else {}
         self.plan = []
-        self.en_transaccion = False
+        self.transaction_manager = transaction_manager or TransactionManager()
 
     def execute(self, sentencias):
         for sentencia in sentencias:
@@ -66,6 +67,7 @@ class Executor(Visitor):
 
     def visit_Insert(self, node):
         tabla = self._tabla(node.table)
+        self._bloquear_tabla(tabla)
         if len(node.values) != len(tabla.columns):
             raise SemanticError(
                 f"'{tabla.name}' tiene {len(tabla.columns)} columnas "
@@ -78,12 +80,14 @@ class Executor(Visitor):
 
     def visit_Delete(self, node):
         tabla = self._tabla(node.table)
+        self._bloquear_tabla(tabla)
         filas = self._filtrar(tabla, node.where)
         print(f"  {tabla.remove(filas)} fila(s) eliminada(s) de '{tabla.name}'")
         return None
 
     def visit_Select(self, node):
         tabla = self._tabla(node.table)
+        self._bloquear_tabla(tabla)
         columnas = tabla.columns if node.columns is None else node.columns
         for c in columnas:
             self._columna(tabla, c)
@@ -132,15 +136,22 @@ class Executor(Visitor):
         print(f"  ({len(filas)} fila(s))")
 
     def visit_BeginTransaction(self, node):
-        if self.en_transaccion:
-            raise SemanticError("ya hay una transacción abierta")
-        self.en_transaccion = True
+        try:
+            self.transaction_manager.begin()
+        except TransactionError as error:
+            raise SemanticError(str(error)) from error
         self.plan.append("inicio de transacción")
         return None
 
     def visit_EndTransaction(self, node):
-        if not self.en_transaccion:
-            raise SemanticError("no hay ninguna transacción abierta")
-        self.en_transaccion = False
+        try:
+            self.transaction_manager.end()
+        except TransactionError as error:
+            raise SemanticError(str(error)) from error
         self.plan.append("fin de transacción")
         return None
+
+    def _bloquear_tabla(self, tabla):
+        if self.transaction_manager.current() is None:
+            return
+        self.transaction_manager.acquire(Resource("table", tabla.name))
