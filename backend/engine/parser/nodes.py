@@ -36,3 +36,23 @@ class BeginTransaction(Node):
 @dataclass
 class EndTransaction(Node):
     pass
+
+@dataclass
+class ColumnDef(Node):
+    name: str
+    type: str
+    size: Optional[int] = None
+
+@dataclass
+class CreateTable(Node):
+    table: str
+    columns: List[ColumnDef]
+    index_column: Optional[str] = None
+    index_kind: Optional[str] = None
+
+
+@dataclass
+class Update(Node):
+    table: str
+    assignments: List[tuple]
+    where: Optional[Compare] = None
