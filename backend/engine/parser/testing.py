@@ -1,7 +1,7 @@
-from Scanner import Scanner
-from Sql_Parser import Parser
-from Visitor import PrintVisitor
-from Executor import Executor, Table
+from .scanner import Scanner
+from .sql_parser import Parser
+from .visitor import PrintVisitor
+from .executor import Executor, Table
 
 catalogo = {
     "alumnos": Table("alumnos", ["id", "nombre", "edad"],

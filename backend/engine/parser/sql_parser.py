@@ -1,6 +1,6 @@
-from Scanner import Scanner, LexicalError
-from Tokens import TokenType
-from Nodes import BeginTransaction, Compare, Delete, EndTransaction, Insert, Select
+from .scanner import Scanner, LexicalError
+from .tokens import TokenType
+from .nodes import BeginTransaction, Compare, Delete, EndTransaction, Insert, Select
 
 
 class ParseError(Exception):

@@ -1,5 +1,5 @@
 import operator
-from Visitor import Visitor
+from .visitor import Visitor
 
 class SemanticError(Exception):
     pass

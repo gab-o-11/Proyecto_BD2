@@ -1,4 +1,4 @@
-from Tokens import KEYWORDS, Token, TokenType
+from .tokens import KEYWORDS, Token, TokenType
 
 
 class LexicalError(Exception):
