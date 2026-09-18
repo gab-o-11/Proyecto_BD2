@@ -22,7 +22,21 @@ Proyecto_BD2/
 └── README.md
 ```
 
+## Desarrollo con un comando (pnpm)
+
+```
+pnpm install    # instala concurrently (raíz)
+pnpm setup      # solo 1ra vez: crea backend/.venv, instala requirements y deps del frontend
+pnpm dev        # levanta backend (8000) + frontend (5173) juntos
+```
+
+`pnpm dev` usa el binario del venv directo (`backend/.venv/bin/uvicorn`),
+sin necesidad de activarlo. El puerto del backend debe seguir en 8000
+porque `frontend/vite.config.js` proxea `/api` hacia ahí.
+
 ## Backend
+
+Por separado (equivale a `pnpm dev:backend`):
 
 ```
 cd backend
@@ -171,6 +185,8 @@ En esta etapa no se implementan `ROLLBACK`, detección de deadlocks, bloqueos
 compartidos ni niveles de aislamiento configurables.
 
 ## Frontend
+
+Por separado (equivale a `pnpm dev:frontend`):
 
 ```
 cd frontend
