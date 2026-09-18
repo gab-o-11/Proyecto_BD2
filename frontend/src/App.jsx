@@ -1,67 +1,43 @@
-import { useState } from 'react'
-
-function Panel({ title, children }) {
-  return (
-    <section className="panel">
-      <h2>{title}</h2>
-      <div className="panel-body">{children}</div>
-    </section>
-  )
-}
+import { useEffect, useState } from 'react'
+import { listTables, runQuery } from './api/client'
+import FilesPanel from './components/FilesPanel'
+import QueryPanel from './components/QueryPanel'
+import ResultsPanel from './components/ResultsPanel'
+import PlanPanel from './components/PlanPanel'
 
 export default function App() {
-  const [stats, setStats] = useState(null)
-  const [claves, setClaves] = useState([])
-  const [error, setError] = useState(null)
+  const [tables, setTables] = useState([])
+  const [result, setResult] = useState(null)
+  const [loading, setLoading] = useState(false)
 
-  async function correrDemo() {
-    setError(null)
-    try {
-      const res = await fetch('/api/hashing/demo')
-      if (!res.ok) throw new Error('HTTP ' + res.status)
-      const data = await res.json()
-      setStats(data.stats)
-      setClaves(data.claves)
-    } catch (e) {
-      setError(String(e))
-    }
+  useEffect(() => {
+    listTables().then(setTables)
+  }, [])
+
+  async function ejecutar(sql) {
+    setLoading(true)
+    const res = await runQuery(sql)
+    setResult(res)
+    setLoading(false)
+    listTables().then(setTables)
   }
 
   return (
     <div className="app">
       <header className="topbar">
         <h1>MiniGestor BD2</h1>
-        <button onClick={correrDemo}>Correr demo hashing</button>
+        <span className="db">— base de datos: minidb (mock)</span>
       </header>
-      {error && <div className="error">{error}</div>}
-      <main className="grid">
-        <Panel title="Archivos">
-          <p>Tablas e indices cargados.</p>
-        </Panel>
-        <Panel title="Consultas">
-          <textarea placeholder="SELECT * FROM tabla WHERE ..." />
-        </Panel>
-        <Panel title="Resultados">
-          {claves.length > 0 ? (
-            <p>Claves insertadas: {claves.join(', ')}</p>
-          ) : (
-            <p>Sin resultados.</p>
-          )}
-        </Panel>
-        <Panel title="Plan de Ejecucion">
-          {stats ? (
-            <ul>
-              {Object.entries(stats).map(([k, v]) => (
-                <li key={k}>
-                  {k}: {String(v)}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>Ejecuta una consulta para ver el plan.</p>
-          )}
-        </Panel>
-      </main>
+      <div className="layout">
+        <FilesPanel tables={tables} />
+        <div className="workarea">
+          <QueryPanel onRun={ejecutar} loading={loading} />
+          <div className="bottom">
+            <ResultsPanel result={result} />
+            <PlanPanel result={result} />
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
