@@ -42,6 +42,8 @@ class ColumnDef(Node):
     name: str
     type: str
     size: Optional[int] = None
+    primary_key: bool = False
+    not_null: bool = False
 
 @dataclass
 class CreateTable(Node):
@@ -55,4 +57,4 @@ class CreateTable(Node):
 class Update(Node):
     table: str
     assignments: List[tuple]
-    where: Optional[Compare] = None
+    where: Optional[Compare] = None 

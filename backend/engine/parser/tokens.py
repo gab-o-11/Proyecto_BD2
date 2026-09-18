@@ -22,6 +22,12 @@ class TokenType(Enum):
     TRANSACTION = auto()
     END = auto()
 
+    ## Restricciones de columna (CREATE TABLE)
+    PRIMARY = auto()
+    KEY = auto()
+    NOT = auto()
+    NULL = auto()
+
     ## ID y tipos de datos
 
     FLOAT_TYPE = auto()
@@ -74,6 +80,10 @@ KEYWORDS = {
     "INT": TokenType.INT_TYPE,
     "VARCHAR": TokenType.VARCHAR_TYPE,
     "UPDATE": TokenType.UPDATE,
+    "PRIMARY": TokenType.PRIMARY,
+    "KEY": TokenType.KEY,
+    "NOT": TokenType.NOT,
+    "NULL": TokenType.NULL,
 
 }
 

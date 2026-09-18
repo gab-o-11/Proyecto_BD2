@@ -63,7 +63,12 @@ class PrintVisitor(Visitor):
 
     def visit_ColumnDef(self, node):
         tam = f"({node.size})" if node.size is not None else ""
-        return f"{node.name} {node.type}{tam}"
+        sql = f"{node.name} {node.type}{tam}"
+        if node.primary_key:
+            sql += " PRIMARY KEY"
+        if node.not_null:
+            sql += " NOT NULL"
+        return sql
 
     def visit_Update(self, node):
         asignaciones = ", ".join(f"{c} = {self._literal(v)}" for c, v in node.assignments)

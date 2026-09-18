@@ -155,24 +155,53 @@ class Parser:
         while self._match(TokenType.COMMA):
             columnas.append(self._column_def())
         self._expect(TokenType.RPAREN, "')'")
-        return CreateTable(tabla, columnas)
+        index_column = self._resolver_primary_key(columnas)
+        return CreateTable(tabla, columnas, index_column=index_column)
 
-    # column_def -> IDENTIFIER ( INT_TYPE | FLOAT_TYPE | VARCHAR_TYPE '(' INT ')' )
+    # type       -> INT_TYPE | FLOAT_TYPE | VARCHAR_TYPE '(' INT ')'
     def _column_def(self):
         nombre = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
         if self._match(TokenType.INT_TYPE):
-            return ColumnDef(nombre, "INT")
-        if self._match(TokenType.FLOAT_TYPE):
-            return ColumnDef(nombre, "FLOAT")
-        if self._match(TokenType.VARCHAR_TYPE):
+            tipo, tam = "INT", None
+        elif self._match(TokenType.FLOAT_TYPE):
+            tipo, tam = "FLOAT", None
+        elif self._match(TokenType.VARCHAR_TYPE):
             self._expect(TokenType.LPAREN, "'('")
             tam = int(self._expect(TokenType.INT, "tamaño del VARCHAR").lexeme)
             self._expect(TokenType.RPAREN, "')'")
-            return ColumnDef(nombre, "VARCHAR", tam)
-        raise ParseError(
-            f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT o VARCHAR), "
-            f"se encontró '{self.current.lexeme}'"
-        )
+            tipo = "VARCHAR"
+        else:
+            raise ParseError(
+                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT o VARCHAR), "
+                f"se encontró '{self.current.lexeme}'"
+            )
+        primary_key, not_null = self._column_constraints()
+        return ColumnDef(nombre, tipo, tam, primary_key=primary_key, not_null=not_null)
+
+    # column_constraint -> PRIMARY KEY | NOT NULL   (cero o más, en cualquier orden)
+    def _column_constraints(self):
+        primary_key = False
+        not_null = False
+        while True:
+            if self._match(TokenType.PRIMARY):
+                self._expect(TokenType.KEY, "KEY")
+                primary_key = True
+            elif self._match(TokenType.NOT):
+                self._expect(TokenType.NULL, "NULL")
+                not_null = True
+            else:
+                break
+        return primary_key, not_null
+
+    # Toma la única columna PRIMARY KEY como índice de la tabla; error si hay más de una.
+    def _resolver_primary_key(self, columnas):
+        claves = [c.name for c in columnas if c.primary_key]
+        if len(claves) > 1:
+            raise ParseError(
+                f"Línea {self.current.line}: solo se permite una PRIMARY KEY, "
+                f"se declararon {len(claves)} ({', '.join(claves)})"
+            )
+        return claves[0] if claves else None
 
     # condition -> IDENTIFIER comp_op value
     def _condition(self):
