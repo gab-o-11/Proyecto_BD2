@@ -1,0 +1,16 @@
+{
+  "name": "proyecto-bd2",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "setup": "python3 -m venv backend/.venv && backend/.venv/bin/pip install -r backend/requirements.txt && pnpm --dir frontend install",
+    "dev": "concurrently -n backend,frontend -c blue,green \"pnpm dev:backend\" \"pnpm dev:frontend\"",
+    "dev:backend": "backend/.venv/bin/uvicorn api.main:app --app-dir backend --reload --port 8000",
+    "dev:frontend": "pnpm --dir frontend dev",
+    "build": "pnpm --dir frontend build"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
