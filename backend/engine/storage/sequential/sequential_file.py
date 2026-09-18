@@ -194,3 +194,35 @@ class SequentialFile:
                 return data
             current = raw[-1]
         return None
+
+    def search_range(self, start_key, end_key):
+        total_records, total_activos, total_eliminados, record_size, overflow_head = self.read_header()
+        if total_records == 0:
+            return []
+        results = []
+        seen = set()
+        for position in range(total_records):
+            raw = self.read_record(position)
+            if raw is None:
+                continue
+            data = raw[:-1]
+            if self.is_deleted(data):
+                continue
+            key_value = data[self.key_index]
+            if start_key <= key_value <= end_key:
+                results.append(data)
+        current = overflow_head
+        while current != -1 and current not in seen:
+            seen.add(current)
+            raw = self.read_record(current)
+            if raw is None:
+                break
+            data = raw[:-1]
+            if self.is_deleted(data):
+                current = raw[-1]
+                continue
+            key_value = data[self.key_index]
+            if start_key <= key_value <= end_key:
+                results.append(data)
+            current = raw[-1]
+        return results
