@@ -150,6 +150,25 @@ class StorageTable:
             count += 1
         return count
 
+    def update_rows(self, rows, assignments):
+        total = 0
+        for row in rows:
+            vieja = row[self.index_field]
+            for columna, valor in assignments:
+                row[columna] = valor
+            values = tuple(self._to_tuple(row))
+            if self.is_clustered:
+                self.seq.update(vieja, values)
+                if row[self.index_field] != vieja:
+                    self.index.rebuild()
+            else:
+                self.heap.update(to_heap_rid(row["__rid__"]), values)
+                if row[self.index_field] != vieja:
+                    self.index.delete(vieja, row["__rid__"])
+                    self.index.insert(row[self.index_field], row["__rid__"])
+            total = total + 1
+        return total
+
     def count(self):
         total = 0
         for row in self._iter_rows():

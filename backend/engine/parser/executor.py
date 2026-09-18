@@ -1,5 +1,6 @@
 import operator
 from .visitor import Visitor
+from ..catalog import StorageTable
 from ..transactions import Resource, TransactionError, TransactionManager
 
 class SemanticError(Exception):
@@ -36,10 +37,11 @@ class Table:
 
 
 class Executor(Visitor):
-    def __init__(self, catalog=None, transaction_manager=None):
+    def __init__(self, catalog=None, transaction_manager=None, data_dir=None):
         self.catalog = catalog if catalog is not None else {}
         self.plan = []
         self.transaction_manager = transaction_manager or TransactionManager()
+        self.data_dir = data_dir
 
     def execute(self, sentencias):
         for sentencia in sentencias:
@@ -212,10 +214,28 @@ class Executor(Visitor):
         nombres = [c.name for c in node.columns]
         if len(nombres) != len(set(nombres)):
             raise SemanticError("hay columnas repetidas")
-        self.catalog[node.table] = Table(node.table, nombres,
-                                         index_column=node.index_column,
-                                         index_kind=node.index_kind)
-        self.plan.append(self._paso("Create Table", "catalog", node.table, 0))
+        if self.data_dir is None:
+            self.catalog[node.table] = Table(node.table, nombres,
+                                             index_column=node.index_column,
+                                             index_kind=node.index_kind)
+            self.plan.append(self._paso("Create Table", "memory", node.table, 0))
+            return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
+        schema = []
+        for c in node.columns:
+            if c.type == "INT":
+                schema.append((c.name, "int"))
+            elif c.type == "FLOAT":
+                schema.append((c.name, "float"))
+            else:
+                schema.append((c.name, "str"))
+        campo = node.index_column
+        if campo is None:
+            campo = nombres[0]
+        tipo = node.index_kind
+        if tipo is None:
+            tipo = "HASH"
+        self.catalog[node.table] = StorageTable(node.table, schema, self.data_dir, campo, tipo)
+        self.plan.append(self._paso("Create Table", "heap", node.table, 0))
         return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
 
     def visit_Update(self, node):
@@ -224,12 +244,16 @@ class Executor(Visitor):
         for columna, _ in node.assignments:
             self._columna(tabla, columna)
         filas = self._filtrar(tabla, node.where)
-        for fila in filas:
-            for columna, valor in node.assignments:
-                fila[columna] = valor
+        if isinstance(tabla, StorageTable):
+            total = tabla.update_rows(filas, node.assignments)
+        else:
+            for fila in filas:
+                for columna, valor in node.assignments:
+                    fila[columna] = valor
+            total = len(filas)
         columnas = ",".join(c for c, _ in node.assignments)
-        self.plan.append(self._paso("Update", self._base(tabla), columnas, len(filas)))
-        return {"message": f"{len(filas)} fila(s) actualizada(s) en '{tabla.name}'"}
+        self.plan.append(self._paso("Update", self._base(tabla), columnas, total))
+        return {"message": f"{total} fila(s) actualizada(s) en '{tabla.name}'"}
 
     def visit_ColumnDef(self, node):
         return None

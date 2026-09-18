@@ -3,6 +3,7 @@ from .sql_parser import Parser, ParseError
 from .visitor import PrintVisitor
 from .executor import Executor
 from .tokens import TokenType
+import tempfile
 
 CONSULTAS = """
 CREATE TABLE alumnos (id INT, nombre VARCHAR(20), promedio FLOAT);
@@ -56,7 +57,7 @@ def main():
     print("\n" + "=" * 60)
     print("EJECUCIÓN")
     print("=" * 60)
-    Executor().execute(ast)
+    Executor(data_dir=tempfile.mkdtemp()).execute(ast)
 
     print("\n" + "=" * 60)
     print("DEBEN DAR ERROR (sintáctico o léxico)")
