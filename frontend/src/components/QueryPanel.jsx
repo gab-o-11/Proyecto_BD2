@@ -2,9 +2,9 @@ import { useState } from 'react'
 
 const EJEMPLOS = [
   "SELECT * FROM clientes WHERE id = 7;",
-  "SELECT * FROM clientes WHERE edad BETWEEN 25 AND 40;",
-  "SELECT * FROM ventas WHERE categoria = 'A' ORDER BY monto DESC;",
-  "SELECT categoria, COUNT(*) FROM ventas GROUP BY categoria;",
+  "SELECT id, monto FROM ventas WHERE monto > 500;",
+  "SELECT categoria FROM ventas GROUP BY categoria;",
+  "SELECT id, edad FROM clientes ORDER BY edad;",
 ]
 
 export default function QueryPanel({ onRun, loading }) {
