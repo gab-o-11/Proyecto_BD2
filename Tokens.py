@@ -14,6 +14,9 @@ class TokenType(Enum):
     INTO = auto()
     DELETE = auto()
     VALUES = auto()
+    BEGIN = auto()
+    TRANSACTION = auto()
+    END = auto()
 
     ## ID y tipos de datos
 
@@ -51,7 +54,9 @@ KEYWORDS = {
     "INTO": TokenType.INTO,
     "DELETE": TokenType.DELETE,
     "VALUES": TokenType.VALUES,
-
+    "BEGIN": TokenType.BEGIN,
+    "TRANSACTION": TokenType.TRANSACTION,
+    "END": TokenType.END,
 }
 
 
