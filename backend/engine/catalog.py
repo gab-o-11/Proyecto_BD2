@@ -1,5 +1,4 @@
 import os
-import shutil
 
 from engine.storage.heap.heapfile import Heapfile
 from engine.storage.sequential.sequential_file import SequentialFile
@@ -218,9 +217,9 @@ def _seed_productos(tabla):
 
 
 def create_catalog(data_dir):
-    if os.path.exists(data_dir):
-        shutil.rmtree(data_dir)
-    os.makedirs(data_dir)
+    fresh = not os.path.exists(data_dir)
+    if fresh:
+        os.makedirs(data_dir)
 
     clientes = StorageTable(
         "clientes",
@@ -243,9 +242,10 @@ def create_catalog(data_dir):
         index_field="id",
         index_kind="BPLUS_CLUSTERED",
     )
-    _seed_clientes(clientes)
-    _seed_ventas(ventas)
-    _seed_productos(productos)
+    if fresh:
+        _seed_clientes(clientes)
+        _seed_ventas(ventas)
+        _seed_productos(productos)
     return {"clientes": clientes, "ventas": ventas, "productos": productos}
 
 
