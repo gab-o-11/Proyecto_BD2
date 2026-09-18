@@ -205,3 +205,31 @@ class Executor(Visitor):
         if self.transaction_manager.current() is None:
             return
         self.transaction_manager.acquire(Resource("table", tabla.name))
+
+    def visit_CreateTable(self, node):
+        if node.table in self.catalog:
+            raise SemanticError(f"la tabla '{node.table}' ya existe")
+        nombres = [c.name for c in node.columns]
+        if len(nombres) != len(set(nombres)):
+            raise SemanticError("hay columnas repetidas")
+        self.catalog[node.table] = Table(node.table, nombres,
+                                         index_column=node.index_column,
+                                         index_kind=node.index_kind)
+        self.plan.append(self._paso("Create Table", "catalog", node.table, 0))
+        return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
+
+    def visit_Update(self, node):
+        tabla = self._tabla(node.table)
+        self._bloquear_tabla(tabla)
+        for columna, _ in node.assignments:
+            self._columna(tabla, columna)
+        filas = self._filtrar(tabla, node.where)
+        for fila in filas:
+            for columna, valor in node.assignments:
+                fila[columna] = valor
+        columnas = ",".join(c for c, _ in node.assignments)
+        self.plan.append(self._paso("Update", self._base(tabla), columnas, len(filas)))
+        return {"message": f"{len(filas)} fila(s) actualizada(s) en '{tabla.name}'"}
+
+    def visit_ColumnDef(self, node):
+        return None
