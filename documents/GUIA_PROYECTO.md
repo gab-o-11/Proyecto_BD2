@@ -99,8 +99,10 @@ SELECT * FROM productos WHERE id = 99;
 UPDATE productos SET stock = 5 WHERE id = 99;
 DELETE FROM productos WHERE id = 99;
 
--- 9. CREATE TABLE (crea una StorageTable nueva, HASH por defecto)
-CREATE TABLE alumnos (id INT, nombre VARCHAR(32), nota FLOAT);
+-- 9. CREATE TABLE — elige columna con PRIMARY KEY y tipo de índice con USING
+CREATE TABLE alumnos (id INT PRIMARY KEY, nombre VARCHAR(32), nota FLOAT);        -- HASH por defecto
+CREATE TABLE cursos (id INT PRIMARY KEY, nombre VARCHAR(32)) USING BPLUS;          -- B+ no agrupado
+CREATE TABLE stock (id INT PRIMARY KEY, cant INT) USING BPLUS_CLUSTERED;           -- B+ agrupado
 INSERT INTO alumnos VALUES (1, 'Ana', 18.5);
 SELECT * FROM alumnos WHERE id = 1;
 
@@ -260,7 +262,7 @@ Pipeline clásico de compilador (trabajo del equipo, ya mergeado):
   - `INSERT INTO t VALUES (v,...)`
   - `DELETE FROM t WHERE cond`
   - `UPDATE t SET col=val,... [WHERE cond]`
-  - `CREATE TABLE t (col TIPO, ...)` con tipos `INT | FLOAT | VARCHAR(n)`
+  - `CREATE TABLE t (col TIPO [PRIMARY KEY] [NOT NULL], ...) [USING <índice>]` con tipos `INT | FLOAT | VARCHAR(n)`. `PRIMARY KEY` fija la columna indexada; `USING` elige el tipo: `HASH` (default) | `BPLUS` | `BPLUS_CLUSTERED`.
   - `BEGIN TRANSACTION` / `END TRANSACTION`
   - `cond` = **una** comparación `col OP valor` con `OP ∈ { =, !=, <, <=, >, >= }`. No hay `AND/OR/BETWEEN`.
 - **`nodes.py`** — dataclasses del AST (`Select`, `Insert`, `Delete`, `Update`, `CreateTable`, `Compare`, `ColumnDef`, `BeginTransaction`, `EndTransaction`). Cada `Node.accept(visitor)` despacha a `visit_<ClaseNodo>` (patrón **Visitor**).
@@ -281,7 +283,7 @@ El corazón de la ejecución. Puntos importantes:
   - **GROUP BY** usa `external_group_by` de `external_hash.py` (Grace hashing con spill a disco) vía `_agg_specs`. Plan `Group By (external-hash)`. Sin agregaciones explícitas devuelve `(columna, conteo)`; con ellas soporta `COUNT/SUM/AVG/MIN/MAX`.
   - **Agregación global** (agregaciones sin `GROUP BY`, ej. `SELECT COUNT(*) FROM t`) → una sola fila. Plan `Aggregate (external-hash)`.
   - **ORDER BY** usa `external_sort` de `external_sort.py` (runs a disco + `heapq.merge` k-way). Plan `Order By (external-merge)`. El umbral de spill es la constante `MEM_BUDGET` en `executor.py` (bájala para forzar spill en la demo).
-- **`visit_CreateTable`** — si hay `data_dir`, crea una `StorageTable` real en disco (por defecto `index_kind=HASH`, `index_column` = primera columna); si no, cae a la `Table` en memoria.
+- **`visit_CreateTable`** — si hay `data_dir`, crea una `StorageTable` real en disco. `index_column` viene del `PRIMARY KEY` (o la primera columna si no hay); `index_kind` viene de la cláusula `USING` (o `HASH` si se omite). Si no hay `data_dir`, cae a la `Table` en memoria.
 - **`visit_Insert/Delete/Update`** — delegan en la tabla y registran el paso en `self.plan`.
 - **Transacciones**: `_bloquear_tabla` pide un lock exclusivo de tabla **solo si hay una transacción activa en el hilo**. Fuera de `BEGIN/END` no bloquea nada.
 - Existe una `Table` en memoria (lista de dicts, búsqueda lineal) como fallback cuando no hay `data_dir`; la ruta real de producción usa `StorageTable`.
