@@ -31,11 +31,19 @@ class QueryBody(BaseModel):
     sql: str
 
 
-def _plan_steps(plan):
-    steps = []
-    for line in plan:
-        steps.append({"op": line})
-    return steps
+def _tipo(sentencia):
+    nombre = type(sentencia).__name__
+    if nombre == "Select":
+        return "select"
+    if nombre == "Insert":
+        return "insert"
+    if nombre == "Delete":
+        return "delete"
+    if nombre == "BeginTransaction":
+        return "begin"
+    if nombre == "EndTransaction":
+        return "end"
+    return "unknown"
 
 
 def _project(columns, rows):
@@ -67,21 +75,44 @@ def query(body: QueryBody):
     try:
         sentencias = Parser(Scanner(body.sql)).parse_program()
     except Exception as error:
-        return {"error": str(error)}
+        return {"error": str(error), "plan": [], "statements": []}
 
     executor = Executor(catalog, TransactionManager())
     salidas = executor.run(sentencias)
     elapsed = round((time.monotonic() - start) * 1000, 1)
 
-    for salida in salidas:
+    statements = []
+    for i in range(len(sentencias)):
+        salida = salidas[i]
+        item = {"type": _tipo(sentencias[i]), "plan": salida["plan"]}
         if "error" in salida:
-            return {"error": salida["error"], "plan": _plan_steps(salida["plan"])}
+            item["error"] = salida["error"]
+        elif "columns" in salida:
+            item["columns"] = salida["columns"]
+            item["rows"] = _project(salida["columns"], salida["rows"])
+        else:
+            item["message"] = salida["message"]
+        statements.append(item)
 
-    ultima = salidas[-1]
-    respuesta = {"plan": _plan_steps(ultima["plan"]), "elapsedMs": elapsed}
-    if "columns" in ultima:
-        respuesta["columns"] = ultima["columns"]
-        respuesta["rows"] = _project(ultima["columns"], ultima["rows"])
+    primero = None
+    for item in statements:
+        if "error" in item:
+            primero = item
+            break
+    if primero is not None:
+        return {"error": primero["error"], "plan": primero["plan"], "statements": statements, "elapsedMs": elapsed}
+
+    respuesta = {"statements": statements, "elapsedMs": elapsed}
+    ultimo = statements[-1]
+    respuesta["plan"] = ultimo["plan"]
+    if "columns" in ultimo:
+        respuesta["columns"] = ultimo["columns"]
+        respuesta["rows"] = ultimo["rows"]
     else:
-        respuesta["message"] = ultima["message"]
+        respuesta["message"] = ultimo["message"]
+    for item in reversed(statements):
+        if "columns" in item:
+            respuesta["columns"] = item["columns"]
+            respuesta["rows"] = item["rows"]
+            break
     return respuesta

@@ -234,10 +234,15 @@ def table_info(tabla):
     columns = []
     for col, col_type in tabla.schema:
         columns.append({"name": col, "type": col_type})
-    indexes = [{"field": tabla.index_field, "type": tabla.index_kind.lower()}]
+    kind = str(tabla.index_kind).upper()
+    indexes = [{"field": tabla.index_field, "type": kind}]
+    storage = "sequential"
+    if not tabla.is_clustered:
+        storage = "heap"
     return {
         "name": tabla.name,
         "columns": columns,
         "indexes": indexes,
         "rows": tabla.count(),
+        "storage": storage,
     }
