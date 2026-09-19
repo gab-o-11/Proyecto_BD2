@@ -1,6 +1,7 @@
 import operator
 from .visitor import Visitor
 from ..transactions import Resource, TransactionError, TransactionManager
+from datetime import date
 
 class SemanticError(Exception):
     pass
@@ -13,9 +14,10 @@ COMPARADORES = {
 
 class Table:
 
-    def __init__(self, name, columns, index_column=None, index_kind=None):
+    def __init__(self, name, columns, index_column=None, index_kind=None, column_types=None):
         self.name = name
         self.columns = columns
+        self.column_types = column_types or {}
         self.index_column = index_column
         self.index_kind = index_kind
         self.rows = []
@@ -106,6 +108,12 @@ class Executor(Visitor):
                 f"'{tabla.name}' tiene {len(tabla.columns)} columnas "
                 f"y se dieron {len(node.values)} valores"
             )
+        for col, valor in zip(tabla.columns, node.values):
+            if getattr(tabla, "column_types", {}).get(col) == "DATE":
+                try:
+                    date.fromisoformat(valor)
+                except (TypeError, ValueError):
+                    raise SemanticError(f"'{valor}' no es una fecha válida (formato YYYY-MM-DD)")
         tabla.insert(dict(zip(tabla.columns, node.values)))
         self.plan.append(self._paso("Insert", self._base(tabla), tabla.name, 1))
         return {"message": f"1 fila insertada en '{tabla.name}'"}
@@ -212,11 +220,12 @@ class Executor(Visitor):
         nombres = [c.name for c in node.columns]
         if len(nombres) != len(set(nombres)):
             raise SemanticError("hay columnas repetidas")
+        tipos = {c.name: c.type for c in node.columns}
         self.catalog[node.table] = Table(node.table, nombres,
                                          index_column=node.index_column,
-                                         index_kind=node.index_kind)
+                                         index_kind=node.index_kind,
+                                         column_types=tipos)
         self.plan.append(self._paso("Create Table", "catalog", node.table, 0))
-        return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
 
     def visit_Update(self, node):
         tabla = self._tabla(node.table)
