@@ -17,10 +17,6 @@ COMPARISON_OPS = (
 
 VALUE_TYPES = (TokenType.INT, TokenType.FLOAT, TokenType.STRING)
 
-AGGREGATE_FUNCS = ("COUNT", "SUM", "AVG", "MIN", "MAX")
-
-INDEX_KINDS = ("HASH", "BPLUS", "BPLUS_CLUSTERED")
-
 class Parser:
     def __init__(self, scanner: Scanner):
         self.scanner = scanner
@@ -85,19 +81,14 @@ class Parser:
             f"se encontró '{self.current.lexeme}'"
         )
 
-    # select -> SELECT select_list FROM IDENTIFIER [ where ] [ group ] [ order ]
+    # select -> SELECT columns FROM IDENTIFIER [ where ] [ group ] [ order ]
     def _select(self):
         if self._match(TokenType.STAR):
             columnas = None
-            agregados = None
         else:
-            columnas = []
-            agregados = []
-            self._select_item(columnas, agregados)
+            columnas = [self._expect(TokenType.IDENTIFIER, "'*' o nombre de columna").lexeme]
             while self._match(TokenType.COMMA):
-                self._select_item(columnas, agregados)
-            if not agregados:
-                agregados = None
+                columnas.append(self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme)
 
         self._expect(TokenType.FROM, "FROM")
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
@@ -116,25 +107,7 @@ class Parser:
             self._expect(TokenType.BY, "BY")
             order_by = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
 
-        return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by, aggregates=agregados)
-
-    # select_item -> IDENTIFIER '(' ( '*' | IDENTIFIER ) ')' | IDENTIFIER
-    def _select_item(self, columnas, agregados):
-        nombre = self._expect(TokenType.IDENTIFIER, "'*' o nombre de columna").lexeme
-        if not self._match(TokenType.LPAREN):
-            columnas.append(nombre)
-            return
-        func = nombre.upper()
-        if func not in AGGREGATE_FUNCS:
-            raise ParseError(
-                f"Línea {self.current.line}: función de agregación desconocida '{nombre}'"
-            )
-        if self._match(TokenType.STAR):
-            arg = None
-        else:
-            arg = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
-        self._expect(TokenType.RPAREN, "')'")
-        agregados.append((func.lower(), arg))
+        return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by)
 
 
     # insert -> INSERT INTO IDENTIFIER VALUES '(' value { ',' value } ')'
@@ -173,7 +146,7 @@ class Parser:
         self._expect(TokenType.EQUAL, "'='")
         return (columna, self._value())
 
-    # create -> CREATE TABLE IDENTIFIER '(' column_def { ',' column_def } ')' [ USING IDENTIFIER ]
+    # create -> CREATE TABLE IDENTIFIER '(' column_def { ',' column_def } ')'
     def _create_table(self):
         self._expect(TokenType.TABLE, "TABLE")
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
@@ -182,61 +155,26 @@ class Parser:
         while self._match(TokenType.COMMA):
             columnas.append(self._column_def())
         self._expect(TokenType.RPAREN, "')'")
-        index_column = self._resolver_primary_key(columnas)
-        index_kind = None
-        if self._match(TokenType.USING):
-            token = self._expect(TokenType.IDENTIFIER, "tipo de índice (HASH, BPLUS o BPLUS_CLUSTERED)")
-            index_kind = token.lexeme.upper()
-            if index_kind not in INDEX_KINDS:
-                raise ParseError(
-                    f"Línea {token.line}: tipo de índice desconocido '{token.lexeme}'"
-                )
-        return CreateTable(tabla, columnas, index_column=index_column, index_kind=index_kind)
+        return CreateTable(tabla, columnas)
 
-    # type       -> INT_TYPE | FLOAT_TYPE | VARCHAR_TYPE '(' INT ')'
+    # column_def -> IDENTIFIER ( INT_TYPE | FLOAT_TYPE | VARCHAR_TYPE '(' INT ')' )
     def _column_def(self):
         nombre = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
         if self._match(TokenType.INT_TYPE):
-            tipo, tam = "INT", None
-        elif self._match(TokenType.FLOAT_TYPE):
-            tipo, tam = "FLOAT", None
-        elif self._match(TokenType.VARCHAR_TYPE):
+            return ColumnDef(nombre, "INT")
+        if self._match(TokenType.FLOAT_TYPE):
+            return ColumnDef(nombre, "FLOAT")
+        if self._match(TokenType.VARCHAR_TYPE):
             self._expect(TokenType.LPAREN, "'('")
             tam = int(self._expect(TokenType.INT, "tamaño del VARCHAR").lexeme)
             self._expect(TokenType.RPAREN, "')'")
-            tipo = "VARCHAR"
-        else:
-            raise ParseError(
-                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT o VARCHAR), "
-                f"se encontró '{self.current.lexeme}'"
-            )
-        primary_key, not_null = self._column_constraints()
-        return ColumnDef(nombre, tipo, tam, primary_key=primary_key, not_null=not_null)
-
-    # column_constraint -> PRIMARY KEY | NOT NULL   (cero o más, en cualquier orden)
-    def _column_constraints(self):
-        primary_key = False
-        not_null = False
-        while True:
-            if self._match(TokenType.PRIMARY):
-                self._expect(TokenType.KEY, "KEY")
-                primary_key = True
-            elif self._match(TokenType.NOT):
-                self._expect(TokenType.NULL, "NULL")
-                not_null = True
-            else:
-                break
-        return primary_key, not_null
-
-    # Toma la única columna PRIMARY KEY como índice de la tabla; error si hay más de una.
-    def _resolver_primary_key(self, columnas):
-        claves = [c.name for c in columnas if c.primary_key]
-        if len(claves) > 1:
-            raise ParseError(
-                f"Línea {self.current.line}: solo se permite una PRIMARY KEY, "
-                f"se declararon {len(claves)} ({', '.join(claves)})"
-            )
-        return claves[0] if claves else None
+            return ColumnDef(nombre, "VARCHAR", tam)
+        if self._match(TokenType.DATE_TYPE):
+            return ColumnDef(nombre, "DATE")
+        raise ParseError(
+            f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT o VARCHAR), "
+            f"se encontró '{self.current.lexeme}'"
+        )
 
     # condition -> IDENTIFIER comp_op value
     def _condition(self):
