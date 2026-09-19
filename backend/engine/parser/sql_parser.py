@@ -169,6 +169,8 @@ class Parser:
             tam = int(self._expect(TokenType.INT, "tamaño del VARCHAR").lexeme)
             self._expect(TokenType.RPAREN, "')'")
             return ColumnDef(nombre, "VARCHAR", tam)
+        if self._match(TokenType.DATE_TYPE):
+            return ColumnDef(nombre, "DATE")
         raise ParseError(
             f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT o VARCHAR), "
             f"se encontró '{self.current.lexeme}'"
