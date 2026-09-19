@@ -1,7 +1,5 @@
 # MiniGestor de Base de Datos Multimodal — Presentación
 
-Guion de sustentación: **(1)** estructura del proyecto y **(2)** demo en vivo con 6 bloques de SQL.
-
 ---
 
 ## Parte 1 — Estructura del proyecto
@@ -48,15 +46,10 @@ Guion de sustentación: **(1)** estructura del proyecto y **(2)** demo en vivo c
 | `ventas` | **B+ no agrupado** | heap (`.dat`) | 40 |
 | `productos` | **B+ agrupado** (clustered) | sequential (`.seq`) | 30 |
 
-> Idea central: el **índice** guarda solo `(clave → puntero)`; los **datos completos** viven en el heap o el sequential. En el clustered, el puntero es una *posición* dentro de un archivo ya ordenado → el orden físico coincide con el de la clave.
-
-Detalle técnico completo en [GUIA_PROYECTO.md](GUIA_PROYECTO.md).
 
 ---
 
 ## Parte 2 — Demo en vivo
-
-> En cada bloque, mira el **panel de Plan de Ejecución**: ahí se ve qué estructura eligió el motor.
 
 ### Bloque 1 — Las 3 estructuras de indexación (búsqueda por igualdad)
 
@@ -124,8 +117,6 @@ SELECT * FROM cursos WHERE id = 2;
 ---
 
 ### Bloque 6 — Transacciones y concurrencia (2PL)
-
-> ⚠️ **Importante:** envía las 4 líneas **juntas en una sola ejecución** (un clic en "Ejecutar"). El contexto transaccional vive por consulta; si las corres una por una, el `END TRANSACTION` no encontrará la transacción abierta.
 
 ```sql
 BEGIN TRANSACTION;
