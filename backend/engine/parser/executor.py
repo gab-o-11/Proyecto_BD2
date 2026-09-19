@@ -1,7 +1,11 @@
 import operator
 from .visitor import Visitor
+from ..catalog import StorageTable
 from ..transactions import Resource, TransactionError, TransactionManager
+from ..external import external_sort
+from ..hashing import external_group_by
 from datetime import date
+
 
 class SemanticError(Exception):
     pass
@@ -11,6 +15,12 @@ COMPARADORES = {
     "<": operator.lt, "<=": operator.le,
     ">": operator.gt, ">=": operator.ge,
 }
+
+MEM_BUDGET = 32
+
+
+def _grupo_unico(fila):
+    return 0
 
 class Table:
 
@@ -38,10 +48,11 @@ class Table:
 
 
 class Executor(Visitor):
-    def __init__(self, catalog=None, transaction_manager=None):
+    def __init__(self, catalog=None, transaction_manager=None, data_dir=None):
         self.catalog = catalog if catalog is not None else {}
         self.plan = []
         self.transaction_manager = transaction_manager or TransactionManager()
+        self.data_dir = data_dir
 
     def execute(self, sentencias):
         for sentencia in sentencias:
@@ -137,26 +148,59 @@ class Executor(Visitor):
 
         if node.group_by is not None:
             self._columna(tabla, node.group_by)
-            grupos = {}
-            for fila in filas:
-                clave = fila[node.group_by]
-                if clave not in grupos:
-                    grupos[clave] = []
-                grupos[clave].append(fila)
+            specs, nombres = self._agg_specs(tabla, node)
+            clave_fn = operator.itemgetter(node.group_by)
             nuevas = []
-            for clave in grupos:
-                nuevas.append({node.group_by: clave, "conteo": len(grupos[clave])})
+            for clave, valores in external_group_by(filas, key_fn=clave_fn, specs=specs, mem_budget=MEM_BUDGET):
+                fila = {node.group_by: clave}
+                for i in range(len(nombres)):
+                    fila[nombres[i]] = valores[i]
+                nuevas.append(fila)
             filas = nuevas
-            columnas = [node.group_by, "conteo"]
-            self.plan.append(self._paso("Group By", "hash", node.group_by, len(filas)))
+            columnas = [node.group_by]
+            for nombre in nombres:
+                columnas.append(nombre)
+            self.plan.append(self._paso("Group By", "external-hash", node.group_by, len(filas)))
+        elif node.aggregates is not None:
+            specs, nombres = self._agg_specs(tabla, node)
+            fila = {}
+            for clave, valores in external_group_by(filas, key_fn=_grupo_unico, specs=specs, mem_budget=MEM_BUDGET):
+                for i in range(len(nombres)):
+                    fila[nombres[i]] = valores[i]
+            if not fila:
+                for nombre in nombres:
+                    fila[nombre] = 0
+            filas = [fila]
+            columnas = []
+            for nombre in nombres:
+                columnas.append(nombre)
+            self.plan.append(self._paso("Aggregate", "external-hash", ",".join(nombres), 1))
 
         if node.order_by is not None:
-            ordenadas = sorted(filas, key=lambda f: f[node.order_by])
-            filas = ordenadas
-            self.plan.append(self._paso("Order By", "sort", node.order_by, len(filas)))
+            filas = list(external_sort(filas, key_fn=operator.itemgetter(node.order_by), mem_budget=MEM_BUDGET))
+            self.plan.append(self._paso("Order By", "external-merge", node.order_by, len(filas)))
 
         self.plan.append(self._paso("Project", ",".join(columnas), tabla.name, len(filas)))
         return {"columns": columnas, "rows": filas}
+
+    def _agg_specs(self, tabla, node):
+        specs = []
+        nombres = []
+        if node.aggregates is None:
+            specs.append(("count", None))
+            nombres.append("conteo")
+            return specs, nombres
+        for func, arg in node.aggregates:
+            if func == "count":
+                specs.append(("count", None))
+                nombres.append("conteo")
+                continue
+            if arg is None:
+                raise SemanticError(f"la función {func.upper()} requiere una columna")
+            self._columna(tabla, arg)
+            specs.append((func, operator.itemgetter(arg)))
+            nombres.append(func + "_" + arg)
+        return specs, nombres
 
     def _filtrar(self, tabla, where):
         if where is None:
@@ -172,6 +216,14 @@ class Executor(Visitor):
             detalle = str(where.column) + " = " + str(where.value)
             self.plan.append(self._paso("Index Search", metodo, detalle, len(filas)))
             return filas
+
+        if where.op in (">", ">=", "<", "<=") and where.column == tabla.index_column and hasattr(tabla, "search_range"):
+            filas = tabla.search_range(where.op, where.value)
+            if filas is not None:
+                metodo = str(tabla.index_kind) + "(" + str(tabla.index_column) + ")"
+                detalle = str(where.column) + " " + str(where.op) + " " + str(where.value)
+                self.plan.append(self._paso("Range Search", metodo, detalle, len(filas)))
+                return filas
 
         detalle = str(where.column) + " " + str(where.op) + " " + str(where.value)
         comparar = COMPARADORES[where.op]
@@ -221,11 +273,34 @@ class Executor(Visitor):
         if len(nombres) != len(set(nombres)):
             raise SemanticError("hay columnas repetidas")
         tipos = {c.name: c.type for c in node.columns}
-        self.catalog[node.table] = Table(node.table, nombres,
-                                         index_column=node.index_column,
-                                         index_kind=node.index_kind,
-                                         column_types=tipos)
-        self.plan.append(self._paso("Create Table", "catalog", node.table, 0))
+
+        if self.data_dir is None:
+            self.catalog[node.table] = Table(node.table, nombres,
+                                             index_column=node.index_column,
+                                             index_kind=node.index_kind,
+                                             column_types=tipos)
+            self.plan.append(self._paso("Create Table", "memory", node.table, 0))
+            return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
+
+        schema = []
+        for c in node.columns:
+            if c.type == "INT":
+                schema.append((c.name, "int"))
+            elif c.type == "FLOAT":
+                schema.append((c.name, "float"))
+            else:
+                schema.append((c.name, "str"))
+        campo = node.index_column
+        if campo is None:
+            campo = nombres[0]
+        tipo = node.index_kind
+        if tipo is None:
+            tipo = "HASH"
+        tabla = StorageTable(node.table, schema, self.data_dir, campo, tipo)
+        tabla.column_types = tipos
+        self.catalog[node.table] = tabla
+        self.plan.append(self._paso("Create Table", "heap", node.table, 0))
+        return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
 
     def visit_Update(self, node):
         tabla = self._tabla(node.table)
@@ -233,12 +308,16 @@ class Executor(Visitor):
         for columna, _ in node.assignments:
             self._columna(tabla, columna)
         filas = self._filtrar(tabla, node.where)
-        for fila in filas:
-            for columna, valor in node.assignments:
-                fila[columna] = valor
+        if isinstance(tabla, StorageTable):
+            total = tabla.update_rows(filas, node.assignments)
+        else:
+            for fila in filas:
+                for columna, valor in node.assignments:
+                    fila[columna] = valor
+            total = len(filas)
         columnas = ",".join(c for c, _ in node.assignments)
-        self.plan.append(self._paso("Update", self._base(tabla), columnas, len(filas)))
-        return {"message": f"{len(filas)} fila(s) actualizada(s) en '{tabla.name}'"}
+        self.plan.append(self._paso("Update", self._base(tabla), columnas, total))
+        return {"message": f"{total} fila(s) actualizada(s) en '{tabla.name}'"}
 
     def visit_ColumnDef(self, node):
         return None
