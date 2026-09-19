@@ -182,6 +182,37 @@ body {
   font-family: "Consolas", "Courier New", monospace;
 }
 
+.import-form {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.import-form input,
+.import-form select {
+  width: 100%;
+  border: 1px solid var(--border);
+  padding: 3px;
+  font: inherit;
+  color: var(--text);
+}
+
+.import-form input[type="file"] {
+  font-size: 10px;
+  padding: 1px;
+}
+
+.import-error,
+.import-message {
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.import-error { color: #a11; }
+.import-message { color: #157347; }
+
 .idx-row .kind {
   color: var(--accent);
   font-weight: 600;

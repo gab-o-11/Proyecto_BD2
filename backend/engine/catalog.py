@@ -133,6 +133,20 @@ class StorageTable:
         pair = as_pair(rid)
         self.index.insert(row[self.index_field], pair)
 
+    def bulk_insert(self, rows):
+        rows = list(rows)
+        if self.is_clustered:
+            values = [tuple(self._to_tuple(row)) for row in rows]
+            self.seq.bulk_load(values)
+            self.index.rebuild()
+            return len(rows)
+        pairs = []
+        for row in rows:
+            rid = self.heap.insert(*self._to_tuple(row))
+            pairs.append((row[self.index_field], as_pair(rid)))
+        self.index.bulk_load(pairs)
+        return len(rows)
+
     def scan(self):
         result = []
         for row in self._iter_rows():

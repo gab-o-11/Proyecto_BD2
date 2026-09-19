@@ -1,7 +1,7 @@
 import os
 import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -10,6 +10,8 @@ from engine.parser.scanner import Scanner
 from engine.parser.sql_parser import Parser
 from engine.parser.executor import Executor
 from engine.transactions import TransactionManager
+from engine.catalog import StorageTable
+from engine.importer import CSVImportError, parse_csv
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_DIR = os.path.dirname(BACKEND_DIR)
@@ -120,3 +122,41 @@ def query(body: QueryBody):
             respuesta["rows"] = item["rows"]
             break
     return respuesta
+
+
+@app.post("/api/tables/import")
+async def import_table(
+    file: UploadFile = File(...),
+    table_name: str = Form(...),
+    index_kind: str = Form("HASH"),
+    index_field: str = Form(""),
+):
+    try:
+        valid_name = (
+            bool(table_name)
+            and (table_name[0].isalpha() or table_name[0] == "_")
+            and all(char.isalnum() or char == "_" for char in table_name)
+        )
+        if not valid_name:
+            raise CSVImportError("el nombre de tabla no es válido")
+        if table_name in catalog:
+            raise CSVImportError(f"la tabla '{table_name}' ya existe")
+        index_kind = index_kind.upper()
+        if index_kind not in ("HASH", "BPLUS", "BPLUS_CLUSTERED"):
+            raise CSVImportError("el índice debe ser HASH, BPLUS o BPLUS_CLUSTERED")
+
+        headers, schema, rows = parse_csv(await file.read())
+        index_field = index_field or headers[0]
+        if index_field not in headers:
+            raise CSVImportError(f"la columna índice '{index_field}' no existe")
+        table = StorageTable(table_name, schema, DATA_DIR, index_field, index_kind)
+        table.bulk_insert(rows)
+        catalog[table_name] = table
+        return {
+            "message": f"tabla '{table_name}' creada e importada correctamente",
+            "table": table_info(table),
+            "rowsImported": len(rows),
+            "schema": [{"name": name, "type": col_type} for name, col_type in schema],
+        }
+    except (CSVImportError, ValueError, TypeError) as error:
+        return {"error": str(error)}

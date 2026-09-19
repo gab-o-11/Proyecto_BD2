@@ -55,3 +55,19 @@ export async function runQuery(sql) {
     return { error: String(e), plan: [], statements: [] }
   }
 }
+
+export async function importCsv(file, tableName, indexKind, indexField) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('table_name', tableName)
+  form.append('index_kind', indexKind)
+  form.append('index_field', indexField)
+  try {
+    const res = await fetch('/api/tables/import', { method: 'POST', body: form })
+    const data = await res.json()
+    if (!res.ok) return { error: data.detail || data.error || `HTTP ${res.status}` }
+    return data
+  } catch (error) {
+    return { error: String(error) }
+  }
+}

@@ -26,7 +26,7 @@ Proyecto_BD2/
 
 ```
 pnpm install    # instala concurrently (raíz)
-pnpm setup      # solo 1ra vez: crea backend/.venv, instala requirements y deps del frontend
+pnpm run setup  # solo 1ra vez: crea backend/.venv, instala requirements y deps del frontend
 pnpm dev        # levanta backend (8000) + frontend (5173) juntos
 ```
 

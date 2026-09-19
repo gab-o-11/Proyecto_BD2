@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { listTables, runQuery } from './api/client'
+import { importCsv, listTables, runQuery } from './api/client'
 import FilesPanel from './components/FilesPanel'
 import QueryPanel from './components/QueryPanel'
 import ResultsPanel from './components/ResultsPanel'
@@ -22,6 +22,15 @@ export default function App() {
     listTables().then(setTables)
   }
 
+  async function importar(file, tableName, indexKind, indexField) {
+    setLoading(true)
+    const res = await importCsv(file, tableName, indexKind, indexField)
+    setResult(res)
+    setLoading(false)
+    listTables().then(setTables)
+    return res
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -29,7 +38,7 @@ export default function App() {
         <span className="db">— base de datos: minidb</span>
       </header>
       <div className="layout">
-        <FilesPanel tables={tables} />
+        <FilesPanel tables={tables} onImport={importar} loading={loading} />
         <div className="workarea">
           <QueryPanel onRun={ejecutar} loading={loading} />
           <div className="bottom">
