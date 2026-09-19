@@ -34,6 +34,7 @@ class TokenType(Enum):
     FLOAT_TYPE = auto()
     INT_TYPE = auto()
     VARCHAR_TYPE = auto()
+    DATE_TYPE = auto()
 
     ## ID y tipos de datos
 
@@ -56,6 +57,7 @@ class TokenType(Enum):
     LESS_EQUAL = auto()
     GREATER = auto()   ## >
     GREATER_EQUAL = auto()
+
 
     ## Fin
     EOF  = auto() ## se coloca para enlazarlo con el punto 2.1.4
@@ -81,6 +83,7 @@ KEYWORDS = {
     "FLOAT": TokenType.FLOAT_TYPE,
     "INT": TokenType.INT_TYPE,
     "VARCHAR": TokenType.VARCHAR_TYPE,
+    "DATE": TokenType.DATE_TYPE,
     "UPDATE": TokenType.UPDATE,
     "PRIMARY": TokenType.PRIMARY,
     "KEY": TokenType.KEY,
