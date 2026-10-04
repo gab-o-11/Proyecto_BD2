@@ -24,6 +24,17 @@ SELECT xx FROM alumnos;
 UPDATE alumnos SET xx = 1;
 CREATE TABLE alumnos (id INT);
 END TRANSACTION;
+SELECT * FROM alumnos WHERE id BETWEEN 1 AND 3;
+CREATE TABLE notas (id INT PRIMARY KEY, nota FLOAT) USING BPLUS;
+INSERT INTO notas VALUES (1, 11.0);
+INSERT INTO notas VALUES (2, 13.5);
+INSERT INTO notas VALUES (3, 15.0);
+INSERT INTO notas VALUES (4, 17.5);
+INSERT INTO notas VALUES (5, 19.0);
+SELECT * FROM notas WHERE id BETWEEN 2 AND 4;
+SELECT n.id FROM notas n WHERE n.id BETWEEN 2 AND 3;
+DELETE FROM notas WHERE id BETWEEN 4 AND 5;
+SELECT * FROM notas;
 """
 
 # Cada una se parsea sola: un error de sintaxis aborta todo el bloque.
@@ -39,6 +50,9 @@ INVALIDAS = [
     "BEGIN;",
     "SELECT * FROM t WHERE n = 'Ana",
     "SELECT # FROM t",
+    "SELECT * FROM t WHERE id BETWEEN 1",
+    "SELECT * FROM t WHERE id BETWEEN 1 10",
+    "SELECT * FROM t WHERE id BETWEEN AND 10",
 ]
 
 # Cada una debe parsear, imprimirse con PrintVisitor y volver a parsear
@@ -52,6 +66,9 @@ IDA_Y_VUELTA = [
     "EXPLAIN ANALYZE SELECT * FROM t WHERE id >= 3",
     "UPDATE t SET a = 1, b = 'x'",
     "INSERT INTO t VALUES (1, 2.5, 'hola')",
+    "SELECT * FROM t WHERE id BETWEEN 10 AND 20",
+    "SELECT * FROM t WHERE id BETWEEN -5 AND 5 ORDER BY id DESC LIMIT 3",
+    "DELETE FROM t WHERE fecha BETWEEN '2026-01-01' AND '2026-12-31'",
 ]
 
 

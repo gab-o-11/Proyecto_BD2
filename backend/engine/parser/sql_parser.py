@@ -2,7 +2,7 @@ import math
 import sys
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import Analyze, BeginTransaction, ColumnDef, Compare, CreateTable, Delete, Distance, EndTransaction, Explain, Insert, Join, Point, Polygon, Intersection, Select, Update, aggregate_name
+from .nodes import Analyze, BeginTransaction, ColumnDef, Compare, CreateTable, Delete, Distance, EndTransaction, Explain, Insert, Join, Point, Polygon, Intersection, Select, Update, aggregate_name, Between
 
 
 class ParseError(Exception):
@@ -357,6 +357,12 @@ class Parser:
             operador = self.previous.lexeme
             valor = self._value()
             return Compare(columna, operador, valor)
+
+        if self._match(TokenType.BETWEEN):
+            bajo = self._value()
+            self._expect(TokenType.AND, "AND")
+            alto = self._value()
+            return Between(columna, bajo, alto)
 
         raise ParseError(
             f"Línea {self.current.line}: se esperaba un símbolo de comparación, "

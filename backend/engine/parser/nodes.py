@@ -117,3 +117,9 @@ class Update(Node):
     table: str
     assignments: List[tuple]
     where: Compare | Intersection | None = None
+
+@dataclass
+class Between(Node):
+    column: str | Distance
+    low: object
+    high: object
