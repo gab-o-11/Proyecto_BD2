@@ -111,6 +111,14 @@ class Perfil:
         return 1.0 - fraccion
 
 
+def selectividad_join(filas_izquierda, filas_derecha, distintos):
+    if distintos is None:
+        return DEFAULT_EQ_SEL
+    izquierda = min(distintos[0], max(filas_izquierda, 1))
+    derecha = min(distintos[1], max(filas_derecha, 1))
+    return 1.0 / max(izquierda, derecha, 1)
+
+
 def costo_seq_scan(perfil, con_filtro):
     total = perfil.paginas * SEQ_PAGE_COST + perfil.filas * CPU_TUPLE_COST
     if con_filtro:

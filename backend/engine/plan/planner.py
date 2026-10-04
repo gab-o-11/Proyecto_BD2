@@ -97,9 +97,9 @@ def limitar(hijo, cantidad):
     return Limite(hijo, cantidad).estimar(hijo.costo_inicio, total, filas, hijo.ancho)
 
 
-def unir(izquierda, derecha, clave_izquierda, clave_derecha, memoria):
+def unir(izquierda, derecha, clave_izquierda, clave_derecha, memoria, distintos=None):
     inicio = izquierda.costo_total + derecha.costo_total
-    filas = ajustar_filas(izquierda.filas_est * derecha.filas_est * costos.DEFAULT_EQ_SEL)
+    filas = ajustar_filas(izquierda.filas_est * derecha.filas_est * costos.selectividad_join(izquierda.filas_est, derecha.filas_est, distintos))
     total = inicio + (izquierda.filas_est + derecha.filas_est + filas) * costos.CPU_TUPLE_COST
     return HashJoin(izquierda, derecha, clave_izquierda, clave_derecha, memoria).estimar(inicio, total, filas, izquierda.ancho + derecha.ancho)
 
