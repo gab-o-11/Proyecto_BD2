@@ -2,6 +2,7 @@ import struct
 
 from engine.storage.heap.heapfile import RID
 from engine.common.rid import as_pair
+from engine.common.io_stats import touch
 
 
 def to_heap_rid(rid):
@@ -11,6 +12,7 @@ def to_heap_rid(rid):
 
 def heap_fetch(heap, rid):
     page_id, slot_id = as_pair(rid)
+    touch(heap.filename, page_id)
     offset = heap.calcular_slot(page_id, slot_id)
     with open(heap.filename, "rb") as f:
         f.seek(offset)

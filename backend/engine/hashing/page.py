@@ -1,6 +1,7 @@
 import os
 import struct
 
+from engine.common.io_stats import touch
 from .boundary import (
     RID_SIZE,
     key_format,
@@ -78,11 +79,13 @@ class FileManager:
 
     def read_raw(self, idx):
         self.disk_accesses += 1
+        touch(self.filename, idx)
         self.f.seek(idx * self.page_size)
         return self.f.read(self.page_size)
 
     def write_raw(self, idx, data):
         self.disk_accesses += 1
+        touch(self.filename, idx)
         self.f.seek(idx * self.page_size)
         self.f.write(data)
         self.f.flush()
@@ -91,6 +94,7 @@ class FileManager:
         self.disk_accesses += 1
         self.f.seek(0, os.SEEK_END)
         idx = self.f.tell() // self.page_size
+        touch(self.filename, idx)
         self.f.write(data)
         self.f.flush()
         return idx

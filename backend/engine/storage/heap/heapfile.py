@@ -1,6 +1,8 @@
 import struct
 import os
 
+from engine.common.io_stats import touch
+
 
 class RID:
     def __init__(self, page_id, slot_id):
@@ -35,6 +37,7 @@ class Heapfile:
         return (self.PAGE_SIZE*page_id)+self.PAGE_HEADER_SIZE+(slot_id*self.RECORD_SIZE)
     
     def read_file_header(self):
+        touch(self.filename, 0)
         with open(self.filename,"rb") as f:
             f.seek(0)
             data=f.read(self.FILE_HEADER_SIZE)            
@@ -42,6 +45,7 @@ class Heapfile:
             return page_size, tot_pag, tot_reg, first_id
         
     def read_page_header(self,page_id):
+        touch(self.filename, page_id)
         with open(self.filename, "rb") as f:
             f.seek(self.PAGE_SIZE*page_id)
             data=f.read(self.PAGE_HEADER_SIZE)
@@ -49,11 +53,13 @@ class Heapfile:
             return id, num_reg, reg_act, free_list
 
     def write_file_header(self, page_size, total_pages, total_records, first_page_id):
+        touch(self.filename, 0)
         with open(self.filename, "r+b") as f:
             f.seek(0)
             f.write(struct.pack(self.FILE_HEADER_FORMAT, page_size, total_pages, total_records, first_page_id))
 
     def write_page_header(self, page_id, num_reg, reg_act, free_list_head):
+        touch(self.filename, page_id)
         with open(self.filename, "r+b") as f:
             f.seek(page_id * self.PAGE_SIZE)
             f.write(struct.pack(self.PAGE_HEADER_FORMAT, page_id, num_reg, reg_act, free_list_head))
@@ -62,6 +68,7 @@ class Heapfile:
         with open(self.filename, "r+b") as f:
             page_size, tot_pag, tot_reg, first_id=self.read_file_header()
             new_page_id=tot_pag+1
+            touch(self.filename, new_page_id)
 
             page_offset=new_page_id*self.PAGE_SIZE
             f.seek(page_offset)
@@ -141,6 +148,7 @@ class Heapfile:
     
     def update(self, rid, nuevos_datos):
         page_id, slot_id = rid.getter()
+        touch(self.filename, page_id)
         slot_offset = self.calcular_slot(page_id, slot_id)
         with open(self.filename, "r+b") as f:
             f.seek(slot_offset)
