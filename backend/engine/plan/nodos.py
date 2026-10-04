@@ -27,8 +27,52 @@ def literal(valor):
     return str(valor)
 
 
+class Predicado:
+    def __init__(self, evaluar, texto):
+        self.evaluar = evaluar
+        self.texto = texto
+
+
+class Rango:
+    def __init__(self, column, bajo, alto, incluye_bajo=True, incluye_alto=True):
+        self.column = column
+        self.bajo = bajo
+        self.alto = alto
+        self.incluye_bajo = incluye_bajo
+        self.incluye_alto = incluye_alto
+        self.op = "BETWEEN"
+
+
+def cota(condicion):
+    if isinstance(condicion, Rango):
+        return condicion.bajo, condicion.alto, condicion.incluye_bajo, condicion.incluye_alto
+    valor = condicion.value
+    if condicion.op == "=":
+        return valor, valor, True, True
+    if condicion.op in (">", ">="):
+        return valor, None, condicion.op == ">=", True
+    return None, valor, True, condicion.op == "<="
+
+
 def condicion_texto(condicion):
+    if isinstance(condicion, Predicado):
+        return condicion.texto
+    if isinstance(condicion, Rango):
+        return condicion.column + " BETWEEN " + literal(condicion.bajo) + " AND " + literal(condicion.alto)
     return condicion.column + " " + condicion.op + " " + literal(condicion.value)
+
+
+def _clave_con_nulos(extraer):
+    def clave(fila):
+        valor = extraer(fila)
+        return (valor is None, valor)
+    return clave
+
+
+def _sin_nulos(filas, extraer):
+    for fila in filas:
+        if extraer(fila) is not None:
+            yield fila
 
 
 def _grupo_unico(fila):
@@ -198,11 +242,19 @@ class SeqScan(Nodo):
         if self.condicion is None:
             yield from self._fuente()
             return
+        if isinstance(self.condicion, Predicado):
+            evaluar = self.condicion.evaluar
+            for fila in self._fuente():
+                if evaluar(fila) is True:
+                    yield fila
+                else:
+                    self.removidas += 1
+            return
         columna = self.condicion.column
         valor = self.condicion.value
         comparar = COMPARADORES[self.condicion.op]
         for fila in self._fuente():
-            if comparar(fila[columna], valor):
+            if fila[columna] is not None and comparar(fila[columna], valor):
                 yield fila
             else:
                 self.removidas += 1
@@ -216,16 +268,26 @@ class SeqScan(Nodo):
 class IndexScan(Nodo):
     tipo = "Index Scan"
 
-    def __init__(self, tabla, condicion, rango):
+    def __init__(self, tabla, condicion, rango, secundario=None):
         super().__init__()
         self.tabla = tabla
         self.condicion = condicion
         self.rango = rango
+        self.secundario = secundario
 
     def tipo_indice(self):
+        if self.secundario is not None:
+            return self.secundario.tipo
         return str(self.tabla.index_kind)
 
+    def columna(self):
+        if self.secundario is not None:
+            return self.secundario.columna
+        return str(self.tabla.index_column)
+
     def indice(self):
+        if self.secundario is not None:
+            return self.secundario.nombre
         return self.tabla.name + "_" + str(self.tabla.index_column) + "_" + self.tipo_indice().lower()
 
     def titulo(self):
@@ -238,17 +300,17 @@ class IndexScan(Nodo):
         return ["Index Cond: (" + condicion_texto(self.condicion) + ")"]
 
     def producir(self):
-        if self.rango:
-            filas = self.tabla.search_range(self.condicion.op, self.condicion.value)
-            if filas is None:
-                comparar = COMPARADORES[self.condicion.op]
-                filas = [f for f in self.tabla.scan() if comparar(f[self.condicion.column], self.condicion.value)]
+        bajo, alto, incluye_bajo, incluye_alto = cota(self.condicion)
+        if self.secundario is not None:
+            filas = self.tabla.buscar_secundario(self.secundario.nombre, bajo, alto, incluye_bajo, incluye_alto)
+        elif self.rango:
+            filas = self.tabla.buscar_rango(bajo, alto, incluye_bajo, incluye_alto)
         else:
             filas = self.tabla.search(self.condicion.column, self.condicion.value)
         yield from filas
 
     def paso(self):
-        metodo = self.tipo_indice() + "(" + str(self.tabla.index_column) + ")"
+        metodo = self.tipo_indice() + "(" + self.columna() + ")"
         op = "Index Search"
         if self.rango:
             op = "Range Search"
@@ -263,7 +325,7 @@ class Sort(Nodo):
         self.clave = clave
         self.memoria = memoria
         self.reverse = reverse
-        self.key_fn = key_fn or operator.itemgetter(clave)
+        self.key_fn = _clave_con_nulos(key_fn or operator.itemgetter(clave))
         self.limite = None
 
     def detalles(self):
@@ -317,9 +379,11 @@ class HashJoin(Nodo):
         return [f"Hash Cond: {self.clave_izquierda} = {self.clave_derecha}", f"Memory: {self.memoria} keys"]
 
     def producir(self):
+        clave_izquierda = operator.itemgetter(self.clave_izquierda)
+        clave_derecha = operator.itemgetter(self.clave_derecha)
         for izquierda, derecha in grace_hash_join(
-            self.hijos[0].iterar(), self.hijos[1].iterar(),
-            operator.itemgetter(self.clave_izquierda), operator.itemgetter(self.clave_derecha),
+            _sin_nulos(self.hijos[0].iterar(), clave_izquierda), _sin_nulos(self.hijos[1].iterar(), clave_derecha),
+            clave_izquierda, clave_derecha,
             mem_budget=self.memoria,
         ):
             yield dict(izquierda, **derecha)
@@ -334,7 +398,9 @@ class Filtro(Nodo):
     def __init__(self, hijo, condicion, key_fn=None, detail=None):
         super().__init__([hijo])
         self.condicion = condicion
-        self.key_fn = key_fn or operator.itemgetter(condicion.column)
+        self.key_fn = key_fn
+        if key_fn is None and not isinstance(condicion, Predicado):
+            self.key_fn = operator.itemgetter(condicion.column)
         self.detail = detail or condicion_texto(condicion)
         self.spatial = key_fn is not None
         self.method = "sequential-distance" if self.spatial else "comparison"
@@ -345,9 +411,16 @@ class Filtro(Nodo):
         return ["Filter: " + self.detail]
 
     def producir(self):
+        if isinstance(self.condicion, Predicado):
+            evaluar = self.condicion.evaluar
+            for fila in self.hijos[0].iterar():
+                if evaluar(fila) is True:
+                    yield fila
+            return
         comparar = COMPARADORES[self.condicion.op]
         for fila in self.hijos[0].iterar():
-            if comparar(self.key_fn(fila), self.condicion.value):
+            valor = self.key_fn(fila)
+            if valor is not None and comparar(valor, self.condicion.value):
                 yield fila
 
     def paso(self):
@@ -423,12 +496,12 @@ class Agregacion(Nodo):
 class Resultado(Nodo):
     tipo = "Result"
 
-    def __init__(self, fila):
+    def __init__(self, filas):
         super().__init__()
-        self.fila = fila
+        self.filas = filas
 
     def producir(self):
-        yield self.fila
+        yield from self.filas
 
 
 class Modificar(Nodo):

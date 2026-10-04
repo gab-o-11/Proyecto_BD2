@@ -1,14 +1,12 @@
 from . import costos
 from .costos import Perfil, ajustar_filas
-from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Resultado, SeqScan, Sort, SpatialIndexScan
+from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Rango, Resultado, SeqScan, Sort, SpatialIndexScan
 
 DESIGUALDADES = (">", ">=", "<", "<=")
 
 
 def _soporta_rango(tabla):
-    if not hasattr(tabla, "search_range"):
-        return False
-    if getattr(tabla, "key_kind", None) not in ("int", "float"):
+    if not hasattr(tabla, "buscar_rango"):
         return False
     return str(tabla.index_kind) != "HASH"
 
@@ -35,6 +33,40 @@ def acceso(tabla, condicion):
         return IndexScan(tabla, condicion, True).estimar(inicio, total, filas, perfil.ancho)
     inicio, total = costos.costo_seq_scan(perfil, True)
     return SeqScan(tabla, condicion).estimar(inicio, total, filas, perfil.ancho)
+
+
+def _filas_condicion(perfil, condicion):
+    if isinstance(condicion, Rango):
+        return ajustar_filas(perfil.filas * perfil.selectividad_rango(condicion.column, condicion.bajo, condicion.alto))
+    return ajustar_filas(perfil.filas * perfil.selectividad(condicion))
+
+
+def acceso_indice(tabla, condicion, secundario=None):
+    perfil = Perfil(tabla)
+    igualdad = not isinstance(condicion, Rango) and condicion.op == "="
+    if not igualdad and not isinstance(condicion, Rango) and condicion.op not in DESIGUALDADES:
+        return None
+    filas = _filas_condicion(perfil, condicion)
+    if secundario is None:
+        if condicion.column != tabla.index_column:
+            return None
+        if not igualdad and not _soporta_rango(tabla):
+            return None
+        inicio, total = costos.costo_index_scan(perfil, _tipo_indice(tabla), filas)
+        return IndexScan(tabla, condicion, not igualdad).estimar(inicio, total, filas, perfil.ancho)
+    if condicion.column != secundario.columna:
+        return None
+    if not igualdad and secundario.tipo == "HASH":
+        return None
+    altura = 1 if secundario.tipo == "HASH" else secundario.estructura.height
+    inicio, total = costos.costo_index_scan(perfil, secundario.tipo, filas, altura)
+    return IndexScan(tabla, condicion, not igualdad, secundario).estimar(inicio, total, filas, perfil.ancho)
+
+
+def escanear(tabla, predicado, selectividad):
+    perfil = Perfil(tabla)
+    inicio, total = costos.costo_seq_scan(perfil, True)
+    return SeqScan(tabla, predicado).estimar(inicio, total, ajustar_filas(perfil.filas * selectividad), perfil.ancho)
 
 
 def agregar(hijo, tabla, agrupar, specs, nombres, memoria):
@@ -86,8 +118,8 @@ def modificar(accion, tabla, hijo, aplicar, metodo, detalle):
     return nodo.estimar(hijo.costo_inicio, total, 0, 0)
 
 
-def resultado(fila, ancho):
-    return Resultado(fila).estimar(0.0, costos.CPU_TUPLE_COST, 1, ancho)
+def resultado(filas, ancho):
+    return Resultado(filas).estimar(0.0, costos.CPU_TUPLE_COST * len(filas), len(filas), ancho)
 
 
 def indice_espacial(tabla, columna, operacion, consulta, detalle, filas, extra_cpu=0.0):

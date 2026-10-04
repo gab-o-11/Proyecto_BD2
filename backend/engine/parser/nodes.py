@@ -41,6 +41,61 @@ class Compare(Node):
     op: str
     value: str
 
+
+@dataclass(frozen=True)
+class And(Node):
+    conditions: tuple
+
+
+@dataclass(frozen=True)
+class Or(Node):
+    conditions: tuple
+
+
+@dataclass(frozen=True)
+class Not(Node):
+    condition: Node
+
+
+@dataclass(frozen=True)
+class Between(Node):
+    column: str | Distance
+    low: object
+    high: object
+    negated: bool = False
+
+
+@dataclass(frozen=True)
+class InList(Node):
+    column: str | Distance
+    values: tuple
+    negated: bool = False
+
+
+@dataclass(frozen=True)
+class Like(Node):
+    column: str
+    pattern: str
+    negated: bool = False
+
+
+@dataclass(frozen=True)
+class IsNull(Node):
+    column: str | Distance
+    negated: bool = False
+
+
+def condition_columns(condition):
+    if condition is None:
+        return []
+    if isinstance(condition, (And, Or)):
+        return [c for parte in condition.conditions for c in condition_columns(parte)]
+    if isinstance(condition, Not):
+        return condition_columns(condition.condition)
+    if isinstance(condition, Intersection):
+        return [condition.column]
+    return expression_columns(condition.column)
+
 @dataclass
 class Select(Node):
     table: str
@@ -71,6 +126,11 @@ class Join:
 class Insert(Node):
     table: str
     values: List[str]
+    columns: Optional[List[str]] = None
+    more_values: Optional[List[List[str]]] = None
+
+    def all_values(self):
+        return [self.values] + list(self.more_values or [])
 
 @dataclass
 class Delete(Node):
@@ -99,6 +159,26 @@ class CreateTable(Node):
     columns: List[ColumnDef]
     index_column: Optional[str] = None
     index_kind: Optional[str] = None
+
+
+@dataclass
+class CreateIndex(Node):
+    name: str
+    table: str
+    column: str
+    kind: Optional[str] = None
+
+
+@dataclass
+class DropTable(Node):
+    table: str
+    if_exists: bool = False
+
+
+@dataclass
+class DropIndex(Node):
+    name: str
+    if_exists: bool = False
 
 
 @dataclass
