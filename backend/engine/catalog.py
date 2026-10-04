@@ -316,6 +316,22 @@ class StorageTable(SpatialTable):
                 continue
             result.append(self._to_dict(pair, data))
         return result
+    
+    def search_between(self, low, high, incluir_bajo=True, incluir_alto=True):
+        if self.key_kind not in ("int", "float"):
+            return None
+        if self.index_kind == "HASH":
+            return None
+        idx = self._field_index(self.index_field)
+        result = []
+        for pair, data in self._range_pairs(low, high):
+            key = data[idx]
+            if not incluir_bajo and key == low:
+                continue
+            if not incluir_alto and key == high:
+                continue
+            result.append(self._to_dict(pair, data))
+        return result
 
     def _range_pairs(self, low, high):
         pares = []

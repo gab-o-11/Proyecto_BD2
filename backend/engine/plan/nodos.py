@@ -216,11 +216,18 @@ class SeqScan(Nodo):
 class IndexScan(Nodo):
     tipo = "Index Scan"
 
-    def __init__(self, tabla, condicion, rango):
+    def __init__(self, tabla, condicion, rango, alto=None):
         super().__init__()
         self.tabla = tabla
         self.condicion = condicion
         self.rango = rango
+        self.alto = alto
+
+    def _texto(self):
+        texto = condicion_texto(self.condicion)
+        if self.alto is not None:
+            texto += " AND " + condicion_texto(self.alto)
+        return texto
 
     def tipo_indice(self):
         return str(self.tabla.index_kind)
@@ -235,10 +242,19 @@ class IndexScan(Nodo):
         return self.tabla.name
 
     def detalles(self):
-        return ["Index Cond: (" + condicion_texto(self.condicion) + ")"]
+        return ["Index Cond: (" + self._texto() + ")"]
 
     def producir(self):
-        if self.rango:
+        if self.rango and self.alto is not None:
+            filas = self.tabla.search_between(self.condicion.value, self.alto.value,
+                                              self.condicion.op == ">=", self.alto.op == "<=")
+            if filas is None:
+                columna = self.condicion.column
+                bajo = COMPARADORES[self.condicion.op]
+                alto = COMPARADORES[self.alto.op]
+                filas = [f for f in self.tabla.scan()
+                         if bajo(f[columna], self.condicion.value) and alto(f[columna], self.alto.value)]
+        elif self.rango:
             filas = self.tabla.search_range(self.condicion.op, self.condicion.value)
             if filas is None:
                 comparar = COMPARADORES[self.condicion.op]
@@ -252,7 +268,7 @@ class IndexScan(Nodo):
         op = "Index Search"
         if self.rango:
             op = "Range Search"
-        return {"op": op, "method": metodo, "detail": condicion_texto(self.condicion)}
+        return {"op": op, "method": metodo, "detail": self._texto()}
 
 
 class Sort(Nodo):
