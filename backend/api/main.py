@@ -5,7 +5,7 @@ from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from engine.catalog import create_catalog, table_info
+from engine.catalog import create_catalog, table_info, vaciar_catalogo
 from engine.parser.scanner import Scanner
 from engine.parser.sql_parser import Parser
 from engine.parser.executor import Executor
@@ -15,7 +15,7 @@ from engine.importer import CSVImportError, parse_csv
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_DIR = os.path.dirname(BACKEND_DIR)
-DATA_DIR = os.path.join(PROJECT_DIR, "data", "runtime")
+DATA_DIR = os.environ.get("BD2_DATA_DIR") or os.path.join(PROJECT_DIR, "data", "runtime")
 
 catalog = create_catalog(DATA_DIR)
 transaction_manager = TransactionManager()
@@ -239,3 +239,19 @@ async def import_table(
         }
     except (CSVImportError, ValueError, TypeError) as error:
         return {"error": str(error)}
+
+
+@app.post("/api/reset")
+def reiniciar_base():
+    nombres = sorted(catalog)
+    transaction_manager.begin()
+    try:
+        transaction_manager.acquire(Resource("catalog", "tables"), LockMode.PX)
+        for nombre in nombres:
+            transaction_manager.acquire(Resource("table", nombre), LockMode.PX)
+        vaciar_catalogo(catalog, DATA_DIR)
+    except (LockError, TransactionError) as error:
+        return {"error": str(error)}
+    finally:
+        transaction_manager.end()
+    return {"message": f"base de datos vacía: se borraron {len(nombres)} tablas", "tablesRemoved": nombres}

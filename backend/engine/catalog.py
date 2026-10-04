@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import struct
 
 from engine.storage.heap.heapfile import Heapfile
@@ -15,6 +16,7 @@ PAGE_SIZE = 4096
 BLOCK_FACTOR = 32
 TABLE_SUFFIX = ".tbl"
 STATS_SUFFIX = ".stats"
+MARCA_SIN_SEMILLA = ".sin_semilla"
 AUTOANALYZE_BASE = 50
 AUTOANALYZE_FACTOR = 0.1
 
@@ -299,6 +301,11 @@ class StorageTable(SpatialTable):
             salida[self.index.nodes_path] = (self.index_field, self.index_kind)
         return salida
 
+    def cerrar(self):
+        self.index.close()
+        for arbol in self.spatial_indexes.values():
+            arbol.close()
+
     def _ruta_rtree(self, column):
         return os.path.join(self.data_dir, self.name + "_" + column + "_rtree")
 
@@ -495,6 +502,8 @@ def create_catalog(data_dir):
     existentes = _load_tables(data_dir)
     if existentes:
         return existentes
+    if os.path.exists(os.path.join(data_dir, MARCA_SIN_SEMILLA)):
+        return {}
 
     clientes = StorageTable(
         "clientes",
@@ -545,3 +554,17 @@ def table_info(tabla):
         "rows": tabla.count(),
         "storage": storage,
     }
+
+
+def vaciar_catalogo(catalogo, data_dir):
+    for tabla in catalogo.values():
+        tabla.cerrar()
+    catalogo.clear()
+    for nombre in os.listdir(data_dir):
+        ruta = os.path.join(data_dir, nombre)
+        if os.path.isdir(ruta):
+            shutil.rmtree(ruta)
+        else:
+            os.remove(ruta)
+    with open(os.path.join(data_dir, MARCA_SIN_SEMILLA), "w") as f:
+        f.write("")
