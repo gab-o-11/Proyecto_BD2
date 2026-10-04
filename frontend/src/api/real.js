@@ -97,3 +97,13 @@ export function rectangulosIndice(tabla, columna, niveles) {
   const params = new URLSearchParams({ column: columna, levels: String(niveles) })
   return leerJson(`/api/tables/${encodeURIComponent(tabla)}/index/rects?${params}`)
 }
+
+export async function reiniciarBase() {
+  try {
+    const res = await fetch('/api/reset', { method: 'POST' })
+    if (!res.ok) return { error: 'HTTP ' + res.status }
+    return await res.json()
+  } catch (error) {
+    return { error: String(error) }
+  }
+}

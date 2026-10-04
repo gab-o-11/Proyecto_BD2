@@ -762,3 +762,31 @@ body {
   width: 16px;
   border-top: 1px solid var(--accent);
 }
+
+.btn.danger {
+  background: #b3261e;
+  border-color: #8c1d18;
+}
+
+.btn.danger:hover {
+  background: #8c1d18;
+}
+
+.reset-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 8px 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.reset-warning {
+  color: #8c1d18;
+  font-size: 11px;
+}
+
+.reset-actions {
+  display: flex;
+  gap: 4px;
+}

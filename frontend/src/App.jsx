@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { importCsv, listTables, runQuery } from './api/client'
+import { importCsv, listTables, reiniciarBase, runQuery } from './api/client'
 import FilesPanel from './components/FilesPanel'
 import QueryPanel from './components/QueryPanel'
 import ResultsPanel from './components/ResultsPanel'
@@ -50,6 +50,20 @@ export default function App() {
   const mbrActivos = vista === 'indices' && rectangulos !== null
   const mostrarMapa = consultaEspacial || mbrActivos
 
+  async function reiniciar() {
+    setLoading(true)
+    const res = await reiniciarBase()
+    setLoading(false)
+    if (!res.error) {
+      setResult(null)
+      setRectangulos(null)
+      setUltimaConsulta('')
+      setDataVersion(v => v + 1)
+    }
+    listTables().then(setTables)
+    return res
+  }
+
   return (
     <div className="app">
       <header className="topbar">
@@ -57,7 +71,7 @@ export default function App() {
         <span className="db">— base de datos: minidb</span>
       </header>
       <div className="layout">
-        <FilesPanel tables={tables} onImport={importar} loading={loading} />
+        <FilesPanel tables={tables} onImport={importar} onReset={reiniciar} loading={loading} />
         <div className={mostrarMapa ? 'workarea' : 'workarea sin-mapa'}>
           <QueryPanel onRun={ejecutar} loading={loading} />
           {mostrarMapa && (
