@@ -201,3 +201,8 @@ def costo_spatial_scan(perfil, altura, capacidad, filas, extra_cpu=0.0):
     total += filas * CPU_TUPLE_COST
     return inicio, total
 
+
+def costo_sort_topn(total_hijo, filas, limite):
+    n = max(filas, 2)
+    inicio = total_hijo + 2 * CPU_OPERATOR_COST * n * math.log2(max(2 * limite, 2))
+    return inicio, inicio + CPU_OPERATOR_COST * min(limite, filas)

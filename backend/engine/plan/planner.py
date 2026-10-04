@@ -54,6 +54,11 @@ def ordenar(hijo, clave, memoria, reverse=False, key_fn=None):
 
 
 def limitar(hijo, cantidad):
+    if isinstance(hijo, Sort) and cantidad <= hijo.memoria:
+        hijo.limite = cantidad
+        entrada = hijo.hijos[0]
+        hijo.costo_inicio, hijo.costo_total = costos.costo_sort_topn(entrada.costo_total, entrada.filas_est, cantidad)
+        hijo.filas_est = ajustar_filas(min(cantidad, entrada.filas_est))
     filas = min(cantidad, hijo.filas_est)
     fraccion = min(1.0, cantidad / max(1, hijo.filas_est))
     total = hijo.costo_inicio + (hijo.costo_total - hijo.costo_inicio) * fraccion

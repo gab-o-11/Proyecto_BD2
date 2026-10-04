@@ -282,6 +282,26 @@ class PagedRTree(RTree):
                         heapq.heappush(pendientes, (cota_hijo, serial, hijo.pid))
         return [entrada.payload for _, _, entrada in sorted(mejores, key=lambda item: (-item[0], -item[1]))]
 
+    def knn_iter(self, center, metric="haversine"):
+        center = self._query(center, metric)
+        raiz = self._leer(self.root_id)
+        if raiz.bounds is None:
+            return
+        pendientes = [(self._lower_bound(center, raiz.bounds, metric), 0, 0, self.root_id)]
+        serial = 0
+        while pendientes:
+            _, tipo, _, item = heapq.heappop(pendientes)
+            if tipo == 1:
+                yield item.payload
+                continue
+            nodo = self._leer(item)
+            for hijo in nodo.children:
+                if nodo.leaf:
+                    heapq.heappush(pendientes, (distance(center, hijo.coordinates, metric), 1, hijo.ordinal, hijo))
+                else:
+                    serial += 1
+                    heapq.heappush(pendientes, (self._lower_bound(center, hijo.bounds, metric), 0, serial, hijo.pid))
+
     def recrear(self):
         self.paginas.close()
         for ruta in (self.meta_path, self.nodes_path):

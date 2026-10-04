@@ -1,3 +1,4 @@
+import heapq
 import math
 import operator
 import time
@@ -263,6 +264,7 @@ class Sort(Nodo):
         self.memoria = memoria
         self.reverse = reverse
         self.key_fn = key_fn or operator.itemgetter(clave)
+        self.limite = None
 
     def detalles(self):
         return ["Sort Key: " + self.clave + (" DESC" if self.reverse else "")]
@@ -270,15 +272,22 @@ class Sort(Nodo):
     def detalles_reales(self):
         if self.real is None:
             return []
+        if self.limite is not None:
+            return ["Sort Method: top-N heapsort  Memory: " + str(self.limite) + " rows"]
         entrada = self.hijos[0].real
         runs = max(1, math.ceil((entrada.filas if entrada is not None else self.real.filas) / self.memoria))
         return ["Sort Method: external k-way merge  Runs: " + str(runs) + "  Memory: " + str(self.memoria) + " rows"]
 
     def producir(self):
+        if self.limite is not None:
+            elegir = heapq.nlargest if self.reverse else heapq.nsmallest
+            yield from elegir(self.limite, self.hijos[0].iterar(), key=self.key_fn)
+            return
         yield from external_sort(self.hijos[0].iterar(), key_fn=self.key_fn, mem_budget=self.memoria, reverse=self.reverse)
 
     def paso(self):
-        return {"op": "Order By", "method": "external-merge", "detail": self.clave + (" DESC" if self.reverse else "")}
+        metodo = "top-n-heapsort" if self.limite is not None else "external-merge"
+        return {"op": "Order By", "method": metodo, "detail": self.clave + (" DESC" if self.reverse else "")}
 
 
 class Calificar(Nodo):

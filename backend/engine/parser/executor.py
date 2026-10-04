@@ -212,16 +212,19 @@ class Executor(Visitor):
             if isinstance(orden, Distance):
                 key_fn = self._distancia(tabla, orden, disponibles)
                 indice = None
-                if node.join is None and node.where is None and node.limit is not None and not node.order_desc and node.group_by is None and node.aggregates is None:
+                texto = PrintVisitor().visit_Distance(orden)
+                if node.join is None and node.limit is not None and not node.order_desc and node.group_by is None and node.aggregates is None:
                     actual = self._tabla(node.table)
                     expresion = self._sin_alias(orden, node.table_alias or node.table)
                     target = self._objetivo_espacial(actual, expresion)
-                    if target is not None:
+                    if target is not None and node.where is None:
                         columna, centro, metrica = target
-                        indice = self._indice_espacial(actual, columna, "knn", lambda tree: tree.knn(centro, node.limit, metrica), PrintVisitor().visit_Distance(orden), node.limit)
+                        indice = self._indice_espacial(actual, columna, "knn", lambda tree: tree.knn(centro, node.limit, metrica), texto, node.limit)
                         if tabla is not actual:
                             indice = Calificar(indice, node.table_alias or node.table, actual.columns)
-                raiz = indice if indice is not None else planner.ordenar(raiz, PrintVisitor().visit_Distance(orden), MEM_BUDGET, node.order_desc, key_fn)
+                    elif target is not None and tabla is actual:
+                        indice = self._knn_filtrado(actual, target, texto, node.where, node.limit, raiz, key_fn)
+                raiz = indice if indice is not None else planner.ordenar(raiz, texto, MEM_BUDGET, node.order_desc, key_fn)
             else:
                 if orden not in columnas:
                     orden = self._columna(tabla, orden)
@@ -437,6 +440,27 @@ class Executor(Visitor):
         if where.op in ("!=", "<>"):
             return 1.0 - costos.DEFAULT_EQ_SEL
         return costos.DEFAULT_EQ_SEL
+
+    def _knn_filtrado(self, tabla, target, texto, where, limite, acceso, key_fn):
+        columna, centro, metrica = target
+        if self._es_espacial(where):
+            seleccion = self._selectividad_espacial(tabla, where)
+            if seleccion is None:
+                seleccion = costos.DEFAULT_SPATIAL_SEL
+        else:
+            condicion = self._condicion_simple(tabla, where)
+            seleccion = Perfil(tabla).selectividad(condicion)
+        total = max(Perfil(tabla).filas, 1)
+        necesarias = min(total, math.ceil(limite / max(seleccion, 1.0 / total)))
+        escaneo = self._indice_espacial(tabla, columna, "knn-incremental", lambda tree: tree.knn_iter(centro, metrica), texto, necesarias)
+        if self._es_espacial(where):
+            incremental = self._filtro_espacial(escaneo, tabla, where, seleccion)
+        else:
+            incremental = planner.filtrar(escaneo, condicion, selectividad=seleccion)
+        ordenado = planner.ordenar(acceso, texto, MEM_BUDGET, False, key_fn)
+        if planner.limitar(incremental, limite).costo_total < planner.limitar(ordenado, limite).costo_total:
+            return incremental
+        return ordenado
 
     def _distancia(self, tabla, expresion, disponibles=None):
         def operando(value):

@@ -344,6 +344,24 @@ class RTree:
                         heapq.heappush(pending, (bound, serial, child))
         return [entry.payload for _, _, entry in sorted(best, key=lambda item: (-item[0], -item[1]))]
 
+    def knn_iter(self, center, metric="haversine"):
+        center = self._query(center, metric)
+        if self.root.bounds is None:
+            return
+        pending = [(self._lower_bound(center, self.root.bounds, metric), 0, 0, self.root)]
+        serial = 0
+        while pending:
+            _, tipo, _, item = heapq.heappop(pending)
+            if tipo == 1:
+                yield item.payload
+                continue
+            for child in item.children:
+                if item.leaf:
+                    heapq.heappush(pending, (distance(center, child.coordinates, metric), 1, child.ordinal, child))
+                else:
+                    serial += 1
+                    heapq.heappush(pending, (self._lower_bound(center, child.bounds, metric), 0, serial, child))
+
     def search_polygon(self, vertices):
         vertices = validate_polygon(vertices)
         xs, ys = zip(*vertices)
