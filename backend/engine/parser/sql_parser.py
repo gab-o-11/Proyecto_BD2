@@ -1,6 +1,8 @@
+import math
+import sys
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import Analyze, BeginTransaction, ColumnDef, Compare, CreateTable, Delete, EndTransaction, Explain, Insert, Select, Update
+from .nodes import Analyze, BeginTransaction, ColumnDef, Compare, CreateTable, Delete, Distance, EndTransaction, Explain, Insert, Join, Point, Polygon, Intersection, Select, Update, aggregate_name
 
 
 class ParseError(Exception):
@@ -93,22 +95,36 @@ class Parser:
             f"se encontró '{self.current.lexeme}'"
         )
 
-    # select -> SELECT select_list FROM IDENTIFIER [ where ] [ group ] [ order ]
+    # select -> SELECT select_list FROM table [alias] [JOIN table [alias] ON col = col] [where] [group] [order]
     def _select(self):
+        projection = None
         if self._match(TokenType.STAR):
             columnas = None
             agregados = None
         else:
             columnas = []
             agregados = []
-            self._select_item(columnas, agregados)
+            projection = [self._select_item(columnas, agregados)]
             while self._match(TokenType.COMMA):
-                self._select_item(columnas, agregados)
+                projection.append(self._select_item(columnas, agregados))
             if not agregados:
                 agregados = None
 
         self._expect(TokenType.FROM, "FROM")
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
+        alias = self._table_alias()
+        join = None
+        inner = self._match(TokenType.INNER)
+        if inner:
+            self._expect(TokenType.JOIN, "JOIN")
+        if inner or self._match(TokenType.JOIN):
+            otra = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
+            otro_alias = self._table_alias()
+            self._expect(TokenType.ON, "ON")
+            izquierda = self._column_name()
+            self._expect(TokenType.EQUAL, "'=' en JOIN")
+            derecha = self._column_name()
+            join = Join(otra, izquierda, derecha, otro_alias)
 
         condicion = None
         if self._match(TokenType.WHERE):
@@ -117,21 +133,101 @@ class Parser:
         group_by = None
         if self._match(TokenType.GROUP):
             self._expect(TokenType.BY, "BY")
-            group_by = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
+            group_by = self._column_name()
 
         order_by = None
+        order_desc = False
         if self._match(TokenType.ORDER):
             self._expect(TokenType.BY, "BY")
-            order_by = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
+            order_by = self._expression()
+            if isinstance(order_by, Intersection):
+                raise ParseError("INTERSECTA solo se admite en WHERE")
+            order_desc = self._match(TokenType.DESC)
+            if not order_desc:
+                self._match(TokenType.ASC)
 
-        return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by, aggregates=agregados)
+        limit = None
+        if self._match(TokenType.LIMIT):
+            token = self._expect(TokenType.INT, "entero no negativo para LIMIT")
+            limit = int(token.lexeme)
+            if not 0 <= limit <= sys.maxsize:
+                raise ParseError(f"Línea {token.line}: LIMIT debe ser un entero entre 0 y {sys.maxsize}")
+
+        return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by,
+                      aggregates=agregados, order_desc=order_desc, table_alias=alias, join=join, projection=projection, limit=limit)
+
+    def _expression(self):
+        nombre = self._column_name()
+        if not self._match(TokenType.LPAREN):
+            return nombre
+        if nombre.upper() == "INTERSECTA":
+            columna = self._column_name()
+            self._expect(TokenType.COMMA, "','")
+            nombre_poligono = self._column_name()
+            if nombre_poligono.upper() != "POLYGON":
+                raise ParseError("INTERSECTA requiere POLYGON(POINT(...), ...)")
+            self._expect(TokenType.LPAREN, "'('")
+            vertices = [self._point()]
+            while self._match(TokenType.COMMA):
+                vertices.append(self._point())
+            self._expect(TokenType.RPAREN, "')'")
+            self._expect(TokenType.RPAREN, "')'")
+            return Intersection(columna, Polygon(tuple(vertices)))
+        if nombre.upper() != "DISTANCIA":
+            raise ParseError(f"Línea {self.previous.line}: función espacial desconocida '{nombre}'")
+        izquierda = self._point_operand()
+        self._expect(TokenType.COMMA, "','")
+        derecha = self._point_operand()
+        metrica = "haversine"
+        if self._match(TokenType.COMMA):
+            token = self._expect(TokenType.STRING, "métrica ('haversine' o 'euclidean')")
+            metrica = token.lexeme[1:-1].lower()
+            if metrica not in ("haversine", "euclidean"):
+                raise ParseError(f"Línea {token.line}: métrica desconocida '{metrica}'")
+        self._expect(TokenType.RPAREN, "')'")
+        return Distance(izquierda, derecha, metrica)
+
+    def _point_operand(self):
+        if self._check(TokenType.POINT):
+            return self._point()
+        return self._column_name()
+
+    def _point(self):
+        self._expect(TokenType.POINT, "POINT")
+        self._expect(TokenType.LPAREN, "'('")
+        latitude = self._coordinate()
+        self._expect(TokenType.COMMA, "','")
+        longitude = self._coordinate()
+        self._expect(TokenType.RPAREN, "')'")
+        return Point(latitude, longitude)
+
+    def _coordinate(self):
+        if not self._match(TokenType.INT, TokenType.FLOAT):
+            raise ParseError(f"Línea {self.current.line}: se esperaba una coordenada numérica")
+        value = float(self.previous.lexeme)
+        if not math.isfinite(value):
+            raise ParseError(f"Línea {self.previous.line}: la coordenada debe ser finita")
+        return value
+
+    def _column_name(self):
+        nombre = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
+        if self._match(TokenType.DOT):
+            nombre += "." + self._expect(TokenType.IDENTIFIER, "nombre de columna después de '.'").lexeme
+        return nombre
+
+    def _table_alias(self):
+        if self._match(TokenType.AS):
+            return self._expect(TokenType.IDENTIFIER, "alias de tabla").lexeme
+        if self._check(TokenType.IDENTIFIER):
+            return self._advance().lexeme
+        return None
 
     # select_item -> IDENTIFIER '(' ( '*' | IDENTIFIER ) ')' | IDENTIFIER
     def _select_item(self, columnas, agregados):
-        nombre = self._expect(TokenType.IDENTIFIER, "'*' o nombre de columna").lexeme
+        nombre = self._column_name()
         if not self._match(TokenType.LPAREN):
             columnas.append(nombre)
-            return
+            return nombre
         func = nombre.upper()
         if func not in AGGREGATE_FUNCS:
             raise ParseError(
@@ -140,9 +236,10 @@ class Parser:
         if self._match(TokenType.STAR):
             arg = None
         else:
-            arg = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
+            arg = self._column_name()
         self._expect(TokenType.RPAREN, "')'")
         agregados.append((func.lower(), arg))
+        return aggregate_name(func.lower(), arg)
 
 
     # insert -> INSERT INTO IDENTIFIER VALUES '(' value { ',' value } ')'
@@ -215,9 +312,11 @@ class Parser:
             tipo = "VARCHAR"
         elif self._match(TokenType.DATE_TYPE):
             tipo, tam = "DATE", None
+        elif self._match(TokenType.POINT):
+            tipo, tam = "POINT", None
         else:
             raise ParseError(
-                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR o DATE), "
+                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR, DATE o POINT), "
                 f"se encontró '{self.current.lexeme}'"
             )
         primary_key, not_null = self._column_constraints()
@@ -250,7 +349,9 @@ class Parser:
 
     # condition -> IDENTIFIER comp_op value
     def _condition(self):
-        columna = self._expect(TokenType.IDENTIFIER, "nombre de la tabla").lexeme
+        columna = self._expression()
+        if isinstance(columna, Intersection):
+            return columna
 
         if self._match(*COMPARISON_OPS):
             operador = self.previous.lexeme
@@ -258,18 +359,20 @@ class Parser:
             return Compare(columna, operador, valor)
 
         raise ParseError(
-            f"Línea {self.current.line}: se esperaba un símbolo de comparacion"
+            f"Línea {self.current.line}: se esperaba un símbolo de comparación, "
             f"se encontró '{self.current.lexeme}'"
         )
 
     # value -> INT | FLOAT | STRING
     def _value(self):
+        if self._check(TokenType.POINT):
+            return self._point()
         if self._match(TokenType.INT):
             return int(self.previous.lexeme)
         if self._match(TokenType.FLOAT):
             return float(self.previous.lexeme)
         if self._match(TokenType.STRING):
-            return self.previous.lexeme[1:-1]
+            return self.previous.lexeme[1:-1].replace("''", "'")
         raise ParseError(
             f"Línea {self.current.line}: se esperaba un valor (número o cadena), "
             f"se encontró '{self.current.lexeme}'"

@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from .nodes import Distance, Point, aggregate_name
 
 
 class Visitor(ABC):
@@ -35,19 +36,33 @@ class PrintVisitor(Visitor):
         if node.columns is None:
             items = ["*"]
         else:
-            items = list(node.columns)
+            expresiones = {columna: columna for columna in node.columns}
             for func, arg in node.aggregates or []:
                 argumento = "*" if arg is None else arg
-                items.append(f"{func.upper()}({argumento})")
+                expresiones[aggregate_name(func, arg)] = f"{func.upper()}({argumento})"
+            orden = node.projection or list(expresiones)
+            items = [expresiones[nombre] for nombre in orden]
 
         sql = f"SELECT {', '.join(items)} FROM {node.table}"
+        if node.table_alias is not None:
+            sql += f" AS {node.table_alias}"
+        if node.join is not None:
+            sql += f" JOIN {node.join.table}"
+            if node.join.alias is not None:
+                sql += f" AS {node.join.alias}"
+            sql += f" ON {node.join.left_column} = {node.join.right_column}"
 
         if node.where is not None:
             sql += " WHERE " + node.where.accept(self)
         if node.group_by is not None:
             sql += f" GROUP BY {node.group_by}"
         if node.order_by is not None:
-            sql += f" ORDER BY {node.order_by}"
+            orden = node.order_by.accept(self) if isinstance(node.order_by, Distance) else node.order_by
+            sql += f" ORDER BY {orden}"
+            if node.order_desc:
+                sql += " DESC"
+        if node.limit is not None:
+            sql += f" LIMIT {node.limit}"
         return sql
 
     def visit_Insert(self, node):
@@ -58,11 +73,28 @@ class PrintVisitor(Visitor):
         return f"DELETE FROM {node.table} WHERE {node.where.accept(self)}"
 
     def visit_Compare(self, node):
-        return f"{node.column} {node.op} {self._literal(node.value)}"
+        columna = node.column.accept(self) if isinstance(node.column, Distance) else node.column
+        return f"{columna} {node.op} {self._literal(node.value)}"
+
+    def visit_Point(self, node):
+        return f"POINT({node.latitude}, {node.longitude})"
+
+    def visit_Polygon(self, node):
+        return "POLYGON(" + ", ".join(self.visit_Point(p) for p in node.vertices) + ")"
+
+    def visit_Intersection(self, node):
+        return f"intersecta({node.column}, {self.visit_Polygon(node.polygon)})"
+
+    def visit_Distance(self, node):
+        izquierda = node.left.accept(self) if isinstance(node.left, Point) else node.left
+        derecha = node.right.accept(self) if isinstance(node.right, Point) else node.right
+        return f"distancia({izquierda}, {derecha}, '{node.metric}')"
 
     @staticmethod
     def _literal(valor):
-        return f"'{valor}'" if isinstance(valor, str) else str(valor)
+        if isinstance(valor, Point):
+            return PrintVisitor().visit_Point(valor)
+        return "'" + valor.replace("'", "''") + "'" if isinstance(valor, str) else str(valor)
 
     def visit_BeginTransaction(self, node):
         return "BEGIN TRANSACTION"

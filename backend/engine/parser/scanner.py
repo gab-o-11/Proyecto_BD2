@@ -7,6 +7,7 @@ class LexicalError(Exception):
 
 
 SYMBOLS = {
+    ".": TokenType.DOT,
     "*": TokenType.STAR,
     ",": TokenType.COMMA,
     "(": TokenType.LPAREN,
@@ -45,9 +46,15 @@ class Scanner:
     ##
 
     def next_token(self) -> Token:
-        while self._peek() in (" ", "\t", "\r", "\n"):
-            if self._advance() == "\n":
-                self.line += 1
+        while True:
+            if self._peek() in (" ", "\t", "\r", "\n"):
+                if self._advance() == "\n":
+                    self.line += 1
+            elif self._peek() == "-" and self._peek(1) == "-":
+                while self._peek() not in ("", "\n"):
+                    self._advance()
+            else:
+                break
 
         self.start = self.current
 
@@ -61,6 +68,8 @@ class Scanner:
             return self._make(SYMBOLS[c])
 
         if c == "<":
+            if self._match(">"):
+                return self._make(TokenType.NOT_EQUAL)
             return self._make(TokenType.LESS_EQUAL if self._match("=") else TokenType.LESS)
         if c == ">":
             return self._make(TokenType.GREATER_EQUAL if self._match("=") else TokenType.GREATER)
@@ -69,7 +78,7 @@ class Scanner:
                 return self._make(TokenType.NOT_EQUAL)
             raise LexicalError("se esperaba '=' después de '!'", self.line)
 
-        if c.isdigit():
+        if c.isdigit() or (c in ("-", "+") and self._peek().isdigit()):
             return self._number()
 
         if c.isalpha() or c == "_":
@@ -82,14 +91,24 @@ class Scanner:
 
     # ---------- reconocedores ----------
     def _number(self) -> Token:
+        tipo = TokenType.INT
         while self._peek().isdigit():
             self._advance()
         if self._peek() == "." and self._peek(1).isdigit():
             self._advance()
             while self._peek().isdigit():
                 self._advance()
-            return self._make(TokenType.FLOAT)
-        return self._make(TokenType.INT)
+            tipo = TokenType.FLOAT
+        if self._peek() in ("e", "E"):
+            self._advance()
+            if self._peek() in ("+", "-"):
+                self._advance()
+            if not self._peek().isdigit():
+                raise LexicalError("se esperaba un número en el exponente", self.line)
+            while self._peek().isdigit():
+                self._advance()
+            tipo = TokenType.FLOAT
+        return self._make(tipo)
 
     def _word(self) -> Token:
         while self._peek().isalnum() or self._peek() == "_":
@@ -98,9 +117,12 @@ class Scanner:
         return self._make(KEYWORDS.get(palabra, TokenType.IDENTIFIER))
 
     def _string(self) -> Token:
-        while self._peek() != "'":
+        while True:
             if self._peek() == "" or self._peek() == "\n":
                 raise LexicalError("cadena sin cerrar", self.line)
+            if self._peek() == "'":
+                self._advance()
+                if self._match("'"):
+                    continue
+                return self._make(TokenType.STRING)
             self._advance()
-        self._advance()
-        return self._make(TokenType.STRING)

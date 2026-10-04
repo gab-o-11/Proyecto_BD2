@@ -24,6 +24,14 @@ class TokenType(Enum):
     USING = auto()
     EXPLAIN = auto()
     ANALYZE = auto()
+    JOIN = auto()
+    INNER = auto()
+    ON = auto()
+    AS = auto()
+    ASC = auto()
+    DESC = auto()
+    LIMIT = auto()
+    POINT = auto()
 
     ## Restricciones de columna (CREATE TABLE)
     PRIMARY = auto()
@@ -50,6 +58,7 @@ class TokenType(Enum):
     ## operadores y simbolos
     STAR = auto()
     COMMA = auto()
+    DOT = auto()
     LPAREN = auto()
     RPAREN = auto()
     SEMICOLON = auto()   ## semicolon es ";"
@@ -65,6 +74,14 @@ class TokenType(Enum):
     EOF  = auto() ## se coloca para enlazarlo con el punto 2.1.4
 
 KEYWORDS = {
+    "LIMIT": TokenType.LIMIT,
+    "POINT": TokenType.POINT,
+    "JOIN": TokenType.JOIN,
+    "INNER": TokenType.INNER,
+    "ON": TokenType.ON,
+    "AS": TokenType.AS,
+    "ASC": TokenType.ASC,
+    "DESC": TokenType.DESC,
     "SELECT": TokenType.SELECT,
     "FROM": TokenType.FROM,
     "WHERE": TokenType.WHERE,
