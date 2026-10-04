@@ -68,6 +68,7 @@ class StorageTable(SpatialTable):
         self.stats_path = os.path.join(data_dir, name + STATS_SUFFIX)
         self.estadisticas = self._leer_estadisticas()
         self._write_descriptor()
+        self._abrir_indices_espaciales([col for col, col_type in schema if col_type == "point"])
 
     def _leer_estadisticas(self):
         if not os.path.exists(self.stats_path):
@@ -229,8 +230,12 @@ class StorageTable(SpatialTable):
     def insert(self, row):
         values = self._to_tuple(row)
         if self.is_clustered:
-            self.index.insert(row[self.index_field], tuple(values))
-            self.spatial_indexes.clear()
+            reorganizaciones = self.seq.reorganizations
+            position = self.index.insert(row[self.index_field], tuple(values))
+            if self.seq.reorganizations != reorganizaciones:
+                self.reconstruir_indices_espaciales()
+            else:
+                self._spatial_insert(dict(row, __rid__=position))
             return
         rid = self.heap.insert(*values)
         pair = as_pair(rid)
@@ -238,7 +243,6 @@ class StorageTable(SpatialTable):
         self._spatial_insert(dict(row, __rid__=pair))
 
     def bulk_insert(self, rows):
-        self.spatial_indexes.clear()
         rows = list(rows)
         if self.is_clustered:
             values = [tuple(self._to_tuple(row)) for row in rows]
@@ -250,8 +254,12 @@ class StorageTable(SpatialTable):
                 rid = self.heap.insert(*self._to_tuple(row))
                 pairs.append((row[self.index_field], as_pair(rid)))
             self.index.bulk_load(pairs)
+        self.reconstruir_indices_espaciales()
         self.analyze()
         return len(rows)
+
+    def _ruta_rtree(self, column):
+        return os.path.join(self.data_dir, self.name + "_" + column + "_rtree")
 
     @staticmethod
     def spatial_id(row):
@@ -321,10 +329,14 @@ class StorageTable(SpatialTable):
     def remove(self, rows):
         count = 0
         if self.is_clustered:
-            self.spatial_indexes.clear()
+            reorganizaciones = self.seq.reorganizations
             for row in rows:
+                if "__rid__" in row:
+                    self._spatial_remove(row)
                 if self.index.delete(row[self.index_field]):
                     count += 1
+            if self.seq.reorganizations != reorganizaciones:
+                self.reconstruir_indices_espaciales()
             return count
         for row in rows:
             pair = row.get("__rid__")
@@ -340,9 +352,7 @@ class StorageTable(SpatialTable):
         total = 0
         for row in rows:
             vieja = row[self.index_field]
-            if self.is_clustered:
-                self.spatial_indexes.clear()
-            else:
+            if not self.is_clustered:
                 self._spatial_remove(row)
             for columna, valor in assignments:
                 row[columna] = valor
@@ -358,6 +368,8 @@ class StorageTable(SpatialTable):
                     self.index.insert(row[self.index_field], row["__rid__"])
                 self._spatial_insert(row)
             total = total + 1
+        if self.is_clustered and self.spatial_indexes:
+            self.reconstruir_indices_espaciales()
         return total
 
     def count(self):
