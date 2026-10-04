@@ -1,6 +1,6 @@
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import BeginTransaction, ColumnDef, Compare, CreateTable, Delete,EndTransaction, Insert, Select, Update
+from .nodes import Analyze, BeginTransaction, ColumnDef, Compare, CreateTable, Delete, EndTransaction, Explain, Insert, Select, Update
 
 
 class ParseError(Exception):
@@ -62,8 +62,16 @@ class Parser:
         self._expect(TokenType.EOF, "';' o fin de la consulta")
         return sentencias
 
-    # statement -> select | insert | delete | update | create | begin_tx | end_tx
+    # statement -> EXPLAIN [ ANALYZE ] statement | ANALYZE IDENTIFIER | select | insert | delete | update | create | begin_tx | end_tx
     def _statement(self):
+        if self._match(TokenType.EXPLAIN):
+            analyze = self._match(TokenType.ANALYZE)
+            if self._check(TokenType.EXPLAIN):
+                raise ParseError(f"Línea {self.current.line}: EXPLAIN no se puede anidar")
+            return Explain(self._statement(), analyze)
+        if self._match(TokenType.ANALYZE):
+            tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
+            return Analyze(tabla)
         if self._match(TokenType.SELECT):
             return self._select()
         if self._match(TokenType.INSERT):
@@ -205,9 +213,11 @@ class Parser:
             tam = int(self._expect(TokenType.INT, "tamaño del VARCHAR").lexeme)
             self._expect(TokenType.RPAREN, "')'")
             tipo = "VARCHAR"
+        elif self._match(TokenType.DATE_TYPE):
+            tipo, tam = "DATE", None
         else:
             raise ParseError(
-                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT o VARCHAR), "
+                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR o DATE), "
                 f"se encontró '{self.current.lexeme}'"
             )
         primary_key, not_null = self._column_constraints()

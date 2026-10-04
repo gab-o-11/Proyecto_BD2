@@ -55,6 +55,17 @@ class CreateTable(Node):
 
 
 @dataclass
+class Explain(Node):
+    statement: Node
+    analyze: bool = False
+
+
+@dataclass
+class Analyze(Node):
+    table: str
+
+
+@dataclass
 class Update(Node):
     table: str
     assignments: List[tuple]

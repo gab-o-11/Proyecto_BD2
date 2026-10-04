@@ -19,6 +19,7 @@ function normStatement(s) {
   if (s.columns) out.columns = s.columns
   if (s.rows) out.rows = s.rows
   if (s.message) out.message = s.message
+  if (s.explain) out.explain = s.explain
   return out
 }
 
@@ -50,6 +51,7 @@ export async function runQuery(sql) {
       plan: (data.plan || []).map(normStep),
       statements: (data.statements || []).map(normStatement),
       elapsedMs: data.elapsedMs,
+      explain: data.explain,
     }
   } catch (e) {
     return { error: String(e), plan: [], statements: [] }

@@ -1,5 +1,6 @@
 import os
 import json
+import struct
 
 from engine.storage.heap.heapfile import Heapfile
 from engine.storage.sequential.sequential_file import SequentialFile
@@ -12,6 +13,9 @@ STRLEN = 32
 PAGE_SIZE = 4096
 BLOCK_FACTOR = 32
 TABLE_SUFFIX = ".tbl"
+STATS_SUFFIX = ".stats"
+AUTOANALYZE_BASE = 50
+AUTOANALYZE_FACTOR = 0.1
 
 
 class StorageTable:
@@ -54,7 +58,88 @@ class StorageTable:
             else:
                 self.index = BPlusTree(index_path, key_type=key_type, block_factor=BLOCK_FACTOR)
             self.seq = None
+        self.record_format = record_format
+        self.stats_path = os.path.join(data_dir, name + STATS_SUFFIX)
+        self.estadisticas = self._leer_estadisticas()
         self._write_descriptor()
+
+    def _leer_estadisticas(self):
+        if not os.path.exists(self.stats_path):
+            return None
+        with open(self.stats_path) as f:
+            return json.load(f)
+
+    def _guardar_estadisticas(self):
+        with open(self.stats_path, "w") as f:
+            json.dump(self.estadisticas, f)
+
+    def filas_totales(self):
+        if self.is_clustered:
+            return self.seq.stats()["active"]
+        return self.heap.read_file_header()[2]
+
+    def paginas(self):
+        if self.is_clustered:
+            return self.seq.stats()["num_pages"]
+        return self.heap.read_file_header()[1]
+
+    def ancho(self):
+        return struct.calcsize(self.record_format)
+
+    def filas_por_pagina(self):
+        if self.is_clustered:
+            return self.seq.SLOTS_PER_PAGE
+        return self.heap.SLOT_PER_PAGE
+
+    def altura_indice(self):
+        if self.is_clustered:
+            return self.index.tree.height
+        if self.index_kind == "HASH":
+            return 1
+        return self.index.height
+
+    def analyze(self):
+        valores = {}
+        for col, col_type in self.schema:
+            valores[col] = []
+        total = 0
+        for row in self._iter_rows():
+            total += 1
+            for col, col_type in self.schema:
+                valores[col].append(row[col])
+        columnas = {}
+        for col, col_type in self.schema:
+            datos = valores[col]
+            info = {"n_distinct": len(set(datos)), "min": None, "max": None}
+            if datos:
+                info["min"] = min(datos)
+                info["max"] = max(datos)
+            columnas[col] = info
+        self.estadisticas = {
+            "filas": total,
+            "paginas": self.paginas(),
+            "columnas": columnas,
+            "cambios": 0,
+        }
+        self._guardar_estadisticas()
+        return self.estadisticas
+
+    def registrar_cambios(self, cantidad):
+        if cantidad <= 0:
+            return
+        if self.estadisticas is None:
+            self.estadisticas = {"filas": 0, "paginas": 0, "columnas": {}, "cambios": 0}
+        self.estadisticas["cambios"] = self.estadisticas.get("cambios", 0) + cantidad
+        self._guardar_estadisticas()
+
+    def autoanalyze(self):
+        if self.estadisticas is None:
+            return False
+        umbral = AUTOANALYZE_BASE + AUTOANALYZE_FACTOR * self.estadisticas["filas"]
+        if self.estadisticas.get("cambios", 0) > umbral:
+            self.analyze()
+            return True
+        return False
 
     def _write_descriptor(self):
         columnas = []
@@ -304,6 +389,9 @@ def _load_tables(data_dir):
             descriptor["index_kind"],
         )
         catalogo[descriptor["name"]] = tabla
+    for tabla in catalogo.values():
+        if tabla.estadisticas is None:
+            tabla.analyze()
     return catalogo
 
 
@@ -342,6 +430,8 @@ def create_catalog(data_dir):
         _seed_ventas(ventas)
     if productos.count() == 0:
         _seed_productos(productos)
+    for tabla in (clientes, ventas, productos):
+        tabla.analyze()
     return {"clientes": clientes, "ventas": ventas, "productos": productos}
 
 

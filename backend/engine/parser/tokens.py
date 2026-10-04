@@ -22,6 +22,8 @@ class TokenType(Enum):
     TRANSACTION = auto()
     END = auto()
     USING = auto()
+    EXPLAIN = auto()
+    ANALYZE = auto()
 
     ## Restricciones de columna (CREATE TABLE)
     PRIMARY = auto()
@@ -34,6 +36,7 @@ class TokenType(Enum):
     FLOAT_TYPE = auto()
     INT_TYPE = auto()
     VARCHAR_TYPE = auto()
+    DATE_TYPE = auto()
 
     ## ID y tipos de datos
 
@@ -57,6 +60,7 @@ class TokenType(Enum):
     GREATER = auto()   ## >
     GREATER_EQUAL = auto()
 
+
     ## Fin
     EOF  = auto() ## se coloca para enlazarlo con el punto 2.1.4
 
@@ -78,9 +82,12 @@ KEYWORDS = {
     "TRANSACTION": TokenType.TRANSACTION,
     "END": TokenType.END,
     "USING": TokenType.USING,
+    "EXPLAIN": TokenType.EXPLAIN,
+    "ANALYZE": TokenType.ANALYZE,
     "FLOAT": TokenType.FLOAT_TYPE,
     "INT": TokenType.INT_TYPE,
     "VARCHAR": TokenType.VARCHAR_TYPE,
+    "DATE": TokenType.DATE_TYPE,
     "UPDATE": TokenType.UPDATE,
     "PRIMARY": TokenType.PRIMARY,
     "KEY": TokenType.KEY,
