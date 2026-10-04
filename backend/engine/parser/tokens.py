@@ -32,6 +32,16 @@ class TokenType(Enum):
     DESC = auto()
     LIMIT = auto()
     POINT = auto()
+    INDEX = auto()
+    DROP = auto()
+    IF = auto()
+    EXISTS = auto()
+    AND = auto()
+    OR = auto()
+    BETWEEN = auto()
+    IN = auto()
+    LIKE = auto()
+    IS = auto()
 
     ## Restricciones de columna (CREATE TABLE)
     PRIMARY = auto()
@@ -110,6 +120,16 @@ KEYWORDS = {
     "KEY": TokenType.KEY,
     "NOT": TokenType.NOT,
     "NULL": TokenType.NULL,
+    "INDEX": TokenType.INDEX,
+    "DROP": TokenType.DROP,
+    "IF": TokenType.IF,
+    "EXISTS": TokenType.EXISTS,
+    "AND": TokenType.AND,
+    "OR": TokenType.OR,
+    "BETWEEN": TokenType.BETWEEN,
+    "IN": TokenType.IN,
+    "LIKE": TokenType.LIKE,
+    "IS": TokenType.IS,
 
 }
 

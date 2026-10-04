@@ -2,7 +2,7 @@ import math
 import sys
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import Analyze, BeginTransaction, ColumnDef, Compare, CreateTable, Delete, Distance, EndTransaction, Explain, Insert, Join, Point, Polygon, Intersection, Select, Update, aggregate_name
+from .nodes import Analyze, And, BeginTransaction, Between, ColumnDef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, Update, aggregate_name
 
 
 class ParseError(Exception):
@@ -22,6 +22,8 @@ VALUE_TYPES = (TokenType.INT, TokenType.FLOAT, TokenType.STRING)
 AGGREGATE_FUNCS = ("COUNT", "SUM", "AVG", "MIN", "MAX")
 
 INDEX_KINDS = ("HASH", "BPLUS", "BPLUS_CLUSTERED")
+
+SECONDARY_KINDS = ("HASH", "BPLUS")
 
 class Parser:
     def __init__(self, scanner: Scanner):
@@ -64,7 +66,7 @@ class Parser:
         self._expect(TokenType.EOF, "';' o fin de la consulta")
         return sentencias
 
-    # statement -> EXPLAIN [ ANALYZE ] statement | ANALYZE IDENTIFIER | select | insert | delete | update | create | begin_tx | end_tx
+    # statement -> EXPLAIN [ ANALYZE ] statement | ANALYZE IDENTIFIER | select | insert | delete | update | create | drop | begin_tx | end_tx
     def _statement(self):
         if self._match(TokenType.EXPLAIN):
             analyze = self._match(TokenType.ANALYZE)
@@ -81,7 +83,11 @@ class Parser:
         if self._match(TokenType.DELETE):
             return self._delete()
         if self._match(TokenType.CREATE):
+            if self._match(TokenType.INDEX):
+                return self._create_index()
             return self._create_table()
+        if self._match(TokenType.DROP):
+            return self._drop()
         if self._match(TokenType.UPDATE):
             return self._update()
         if self._match(TokenType.BEGIN):
@@ -91,8 +97,8 @@ class Parser:
             self._expect(TokenType.TRANSACTION, "TRANSACTION")
             return EndTransaction()
         raise ParseError(
-            f"Línea {self.current.line}: se esperaba SELECT, INSERT o DELETE, "
-            f"se encontró '{self.current.lexeme}'"
+            f"Línea {self.current.line}: se esperaba SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, "
+            f"EXPLAIN, ANALYZE o BEGIN, se encontró '{self.current.lexeme}'"
         )
 
     # select -> SELECT select_list FROM table [alias] [JOIN table [alias] ON col = col] [where] [group] [order]
@@ -242,17 +248,29 @@ class Parser:
         return aggregate_name(func.lower(), arg)
 
 
-    # insert -> INSERT INTO IDENTIFIER VALUES '(' value { ',' value } ')'
+    # insert -> INSERT INTO IDENTIFIER [ '(' IDENTIFIER { ',' IDENTIFIER } ')' ] VALUES row { ',' row }
     def _insert(self):
         self._expect(TokenType.INTO, "INTO")
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
+        columnas = None
+        if self._match(TokenType.LPAREN):
+            columnas = [self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme]
+            while self._match(TokenType.COMMA):
+                columnas.append(self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme)
+            self._expect(TokenType.RPAREN, "')'")
         self._expect(TokenType.VALUES, "VALUES")
+        filas = [self._row()]
+        while self._match(TokenType.COMMA):
+            filas.append(self._row())
+        return Insert(tabla, filas[0], columnas, filas[1:] or None)
+
+    def _row(self):
         self._expect(TokenType.LPAREN, "'('")
         valores = [self._value()]
         while self._match(TokenType.COMMA):
             valores.append(self._value())
         self._expect(TokenType.RPAREN, "')'")
-        return Insert(tabla, valores)
+        return valores
 
     # delete -> DELETE FROM IDENTIFIER WHERE condition
     def _delete(self):
@@ -297,6 +315,40 @@ class Parser:
                     f"Línea {token.line}: tipo de índice desconocido '{token.lexeme}'"
                 )
         return CreateTable(tabla, columnas, index_column=index_column, index_kind=index_kind)
+
+    def _create_index(self):
+        nombre = self._expect(TokenType.IDENTIFIER, "nombre del índice").lexeme
+        self._expect(TokenType.ON, "ON")
+        tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
+        self._expect(TokenType.LPAREN, "'('")
+        columna = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
+        self._expect(TokenType.RPAREN, "')'")
+        tipo = None
+        if self._match(TokenType.USING):
+            token = self._expect(TokenType.IDENTIFIER, "tipo de índice (HASH o BPLUS)")
+            tipo = token.lexeme.upper()
+            if tipo == "BPLUS_CLUSTERED":
+                raise ParseError(
+                    f"Línea {token.line}: un índice secundario no puede ser agrupado; "
+                    f"el índice agrupado se define en CREATE TABLE ... USING BPLUS_CLUSTERED"
+                )
+            if tipo not in SECONDARY_KINDS:
+                raise ParseError(f"Línea {token.line}: tipo de índice desconocido '{token.lexeme}'")
+        return CreateIndex(nombre, tabla, columna, tipo)
+
+    def _drop(self):
+        if self._match(TokenType.TABLE):
+            si_existe = self._if_exists()
+            return DropTable(self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme, si_existe)
+        self._expect(TokenType.INDEX, "TABLE o INDEX")
+        si_existe = self._if_exists()
+        return DropIndex(self._expect(TokenType.IDENTIFIER, "nombre del índice").lexeme, si_existe)
+
+    def _if_exists(self):
+        if self._match(TokenType.IF):
+            self._expect(TokenType.EXISTS, "EXISTS")
+            return True
+        return False
 
     # type       -> INT_TYPE | FLOAT_TYPE | VARCHAR_TYPE '(' INT ')'
     def _column_def(self):
@@ -347,8 +399,29 @@ class Parser:
             )
         return claves[0] if claves else None
 
-    # condition -> IDENTIFIER comp_op value
+    # condition -> and_condition { OR and_condition }
     def _condition(self):
+        partes = [self._and_condition()]
+        while self._match(TokenType.OR):
+            partes.append(self._and_condition())
+        return partes[0] if len(partes) == 1 else Or(tuple(partes))
+
+    def _and_condition(self):
+        partes = [self._not_condition()]
+        while self._match(TokenType.AND):
+            partes.append(self._not_condition())
+        return partes[0] if len(partes) == 1 else And(tuple(partes))
+
+    def _not_condition(self):
+        if self._match(TokenType.NOT):
+            return Not(self._not_condition())
+        if self._match(TokenType.LPAREN):
+            condicion = self._condition()
+            self._expect(TokenType.RPAREN, "')'")
+            return condicion
+        return self._predicate()
+
+    def _predicate(self):
         columna = self._expression()
         if isinstance(columna, Intersection):
             return columna
@@ -358,15 +431,41 @@ class Parser:
             valor = self._value()
             return Compare(columna, operador, valor)
 
+        if self._match(TokenType.IS):
+            negado = self._match(TokenType.NOT)
+            self._expect(TokenType.NULL, "NULL")
+            return IsNull(columna, negado)
+
+        negado = self._match(TokenType.NOT)
+        if self._match(TokenType.BETWEEN):
+            bajo = self._value()
+            self._expect(TokenType.AND, "AND en BETWEEN")
+            alto = self._value()
+            return Between(columna, bajo, alto, negado)
+        if self._match(TokenType.IN):
+            self._expect(TokenType.LPAREN, "'('")
+            valores = [self._value()]
+            while self._match(TokenType.COMMA):
+                valores.append(self._value())
+            self._expect(TokenType.RPAREN, "')'")
+            return InList(columna, tuple(valores), negado)
+        if self._match(TokenType.LIKE):
+            token = self._expect(TokenType.STRING, "patrón de LIKE entre comillas")
+            if isinstance(columna, Distance):
+                raise ParseError(f"Línea {token.line}: LIKE requiere una columna de texto")
+            return Like(columna, token.lexeme[1:-1].replace("''", "'"), negado)
+
         raise ParseError(
-            f"Línea {self.current.line}: se esperaba un símbolo de comparación, "
+            f"Línea {self.current.line}: se esperaba un símbolo de comparación, BETWEEN, IN, LIKE o IS, "
             f"se encontró '{self.current.lexeme}'"
         )
 
-    # value -> INT | FLOAT | STRING
+    # value -> INT | FLOAT | STRING | NULL | POINT
     def _value(self):
         if self._check(TokenType.POINT):
             return self._point()
+        if self._match(TokenType.NULL):
+            return None
         if self._match(TokenType.INT):
             return int(self.previous.lexeme)
         if self._match(TokenType.FLOAT):
