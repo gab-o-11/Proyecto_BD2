@@ -2,7 +2,7 @@ import math
 import sys
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import Analyze, And, BeginTransaction, Between, ColumnDef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, Update, aggregate_name
+from .nodes import Analyze, And, BeginTransaction, Between, ColumnDef, ColumnRef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, Update, aggregate_name
 
 
 class ParseError(Exception):
@@ -438,6 +438,8 @@ class Parser:
 
         if self._match(*COMPARISON_OPS):
             operador = self.previous.lexeme
+            if self._check(TokenType.IDENTIFIER):
+                return Compare(columna, operador, ColumnRef(self._column_name()))
             valor = self._value()
             return Compare(columna, operador, valor)
 

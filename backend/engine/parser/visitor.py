@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from .nodes import And, Distance, Or, Point, aggregate_name
+from .nodes import And, ColumnRef, Distance, Or, Point, aggregate_name
 
 
 class Visitor(ABC):
@@ -134,6 +134,8 @@ class PrintVisitor(Visitor):
     def _literal(valor):
         if valor is None:
             return "NULL"
+        if isinstance(valor, ColumnRef):
+            return valor.name
         if isinstance(valor, Point):
             return PrintVisitor().visit_Point(valor)
         return "'" + valor.replace("'", "''") + "'" if isinstance(valor, str) else str(valor)

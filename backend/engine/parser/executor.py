@@ -4,7 +4,7 @@ import re
 import struct
 import time
 from .visitor import PrintVisitor, Visitor
-from .nodes import And, Between, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, aggregate_name, condition_columns, expression_columns
+from .nodes import And, Between, ColumnRef, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, aggregate_name, condition_columns, expression_columns
 from ..catalog import StorageTable, nombres_de_indices
 from ..transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from ..plan import Predicado, Rango, base_de, planner, reporte
@@ -370,6 +370,8 @@ class Executor(Visitor):
             return type(condicion)(tuple(self._mapear_condicion(c, columna, distancia) for c in condicion.conditions))
         if isinstance(condicion, Not):
             return Not(self._mapear_condicion(condicion.condition, columna, distancia))
+        if isinstance(getattr(condicion, "value", None), ColumnRef):
+            condicion = replace(condicion, value=ColumnRef(columna(condicion.value.name)))
         if isinstance(condicion.column, Distance):
             return replace(condicion, column=distancia(condicion.column))
         return replace(condicion, column=columna(condicion.column))
@@ -469,7 +471,7 @@ class Executor(Visitor):
             return planner.acceso(tabla, None)
         if self._es_espacial(where):
             return self._acceso_espacial(tabla, where)
-        if isinstance(where, Compare):
+        if self._es_simple(where):
             simple = self._condicion_simple(tabla, where)
             principal = planner.acceso(tabla, simple)
             opciones = [o for o in [principal] + self._opciones_secundarias(tabla, simple) if isinstance(o, IndexScan)]
@@ -502,7 +504,7 @@ class Executor(Visitor):
             opcion = self._acceso_espacial(tabla, condicion)
             usa_indice = isinstance(opcion, SpatialIndexScan) or any(isinstance(h, SpatialIndexScan) for h in opcion.hijos)
             return [opcion] if usa_indice else []
-        if isinstance(condicion, Compare):
+        if self._es_simple(condicion):
             simple = self._condicion_simple(tabla, condicion)
             opciones = self._opciones_secundarias(tabla, simple)
             principal = planner.acceso_indice(tabla, simple)
@@ -587,6 +589,8 @@ class Executor(Visitor):
             patron = _patron_like(condicion.pattern)
             negado = condicion.negated
             return (lambda fila: None if (valor := extraer(fila)) is None else bool(patron.fullmatch(valor)) != negado), (1.0 - costos.DEFAULT_MATCH_SEL if negado else costos.DEFAULT_MATCH_SEL)
+        if isinstance(condicion, Compare) and isinstance(condicion.value, ColumnRef):
+            return self._comparar_columnas(tabla, condicion, extraer, tipo, columna)
         convertir = self._conversor(tabla, columna, condicion)
         if isinstance(condicion, Compare):
             valor = convertir(condicion.value)
@@ -615,6 +619,30 @@ class Executor(Visitor):
                 return not negado
             return None if hay_nulo else negado
         return pertenece, (1.0 - seleccion if negado else seleccion)
+
+    def _comparar_columnas(self, tabla, condicion, extraer, tipo, columna):
+        otra, tipo_otra, columna_otra = self._expresion_condicion(tabla, condicion.value.name)
+        numericos = {"int", "float"}
+        if tipo != tipo_otra and not (tipo in numericos and tipo_otra in numericos):
+            raise SemanticError(f"no se puede comparar '{condicion.column}' con '{condicion.value.name}': tipos distintos")
+        if tipo == "point":
+            raise SemanticError("las columnas POINT solo se comparan con distancia() o intersecta()")
+        comparar = COMPARADORES[condicion.op]
+        perfil = Perfil(tabla)
+        if condicion.op == "=":
+            distintos = max(perfil.n_distinct(columna) if columna else 1, perfil.n_distinct(columna_otra) if columna_otra else 1)
+            seleccion = 1.0 / max(distintos, 1)
+        elif condicion.op in ("!=", "<>"):
+            seleccion = 1.0 - costos.DEFAULT_EQ_SEL
+        else:
+            seleccion = costos.DEFAULT_INEQ_SEL
+
+        def evaluar(fila):
+            a, b = extraer(fila), otra(fila)
+            if a is None or b is None:
+                return None
+            return comparar(a, b)
+        return evaluar, seleccion
 
     def _conversor(self, tabla, columna, condicion):
         if columna is not None:
@@ -670,7 +698,7 @@ class Executor(Visitor):
             seleccion = self._selectividad_espacial(tabla, where)
             if seleccion is None:
                 seleccion = costos.DEFAULT_SPATIAL_SEL
-        elif isinstance(where, Compare):
+        elif self._es_simple(where):
             condicion = self._condicion_simple(tabla, where)
             seleccion = Perfil(tabla).selectividad(condicion)
         else:
@@ -728,7 +756,11 @@ class Executor(Visitor):
 
     @staticmethod
     def _es_espacial(condicion):
-        return isinstance(condicion, Intersection) or (isinstance(condicion, Compare) and isinstance(condicion.column, Distance))
+        return isinstance(condicion, Intersection) or (Executor._es_simple(condicion) and isinstance(condicion.column, Distance))
+
+    @staticmethod
+    def _es_simple(condicion):
+        return isinstance(condicion, Compare) and not isinstance(condicion.value, ColumnRef)
 
     @staticmethod
     def _sin_alias(expresion, prefijo):

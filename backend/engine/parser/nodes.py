@@ -35,6 +35,11 @@ def expression_columns(expression):
         return [operand for operand in (expression.left, expression.right) if isinstance(operand, str)]
     return [expression] if isinstance(expression, str) else []
 
+@dataclass(frozen=True)
+class ColumnRef(Node):
+    name: str
+
+
 @dataclass
 class Compare(Node):
     column: str | Distance
@@ -94,7 +99,10 @@ def condition_columns(condition):
         return condition_columns(condition.condition)
     if isinstance(condition, Intersection):
         return [condition.column]
-    return expression_columns(condition.column)
+    columnas = expression_columns(condition.column)
+    if isinstance(getattr(condition, "value", None), ColumnRef):
+        columnas.append(condition.value.name)
+    return columnas
 
 @dataclass
 class Select(Node):
