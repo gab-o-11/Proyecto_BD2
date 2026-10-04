@@ -25,6 +25,16 @@ UPDATE alumnos SET xx = 1;
 CREATE TABLE alumnos (id INT);
 END TRANSACTION;
 SELECT * FROM alumnos WHERE id BETWEEN 1 AND 3;
+CREATE TABLE notas (id INT PRIMARY KEY, nota FLOAT) USING BPLUS;
+INSERT INTO notas VALUES (1, 11.0);
+INSERT INTO notas VALUES (2, 13.5);
+INSERT INTO notas VALUES (3, 15.0);
+INSERT INTO notas VALUES (4, 17.5);
+INSERT INTO notas VALUES (5, 19.0);
+SELECT * FROM notas WHERE id BETWEEN 2 AND 4;
+SELECT n.id FROM notas n WHERE n.id BETWEEN 2 AND 3;
+DELETE FROM notas WHERE id BETWEEN 4 AND 5;
+SELECT * FROM notas;
 """
 
 # Cada una se parsea sola: un error de sintaxis aborta todo el bloque.

@@ -222,7 +222,7 @@ class Executor(Visitor):
                         indice = self._indice_espacial(actual, columna, "knn", lambda tree: tree.knn(centro, node.limit, metrica), texto, node.limit)
                         if tabla is not actual:
                             indice = Calificar(indice, node.table_alias or node.table, actual.columns)
-                    elif target is not None and tabla is actual:
+                    elif target is not None and tabla is actual and not isinstance(node.where, Between):
                         indice = self._knn_filtrado(actual, target, texto, node.where, node.limit, raiz, key_fn)
                 raiz = indice if indice is not None else planner.ordenar(raiz, texto, MEM_BUDGET, node.order_desc, key_fn)
             else:
@@ -239,7 +239,7 @@ class Executor(Visitor):
 
     def _fuente_select(self, node):
         if isinstance(node.where, Between):
-            raise SemanticError("BETWEEN aún no está soportado por el planificador")
+            return self._fuente_rango(node)
         izquierda = self._tabla(node.table)
         derecha = None if node.join is None else self._tabla(node.join.table)
         for tabla in sorted([izquierda] + ([] if derecha is None else [derecha]), key=lambda t: t.name):
@@ -302,6 +302,16 @@ class Executor(Visitor):
         elif espacial:
             raiz = self._filtro_espacial(raiz, fuente, node.where)
         return raiz, fuente
+
+    def _fuente_rango(self, node):
+        rango = node.where
+        if isinstance(rango.column, Distance):
+            raise SemanticError("BETWEEN con distancia aún no está soportado")
+        inferior = replace(node, where=Compare(rango.column, ">=", rango.low))
+        raiz, fuente = self._fuente_select(inferior)
+        columna = self._columna(fuente, rango.column)
+        alto = Compare(columna, "<=", self._convertir(fuente, columna, rango.high))
+        return planner.filtrar(raiz, alto), fuente
 
     def visit_Select(self, node):
         raiz, columnas, tabla = self._plan_select(node)
@@ -393,7 +403,7 @@ class Executor(Visitor):
 
     def _acceso(self, tabla, where):
         if isinstance(where, Between):
-            raise SemanticError("BETWEEN aún no está soportado por el planificador")
+            return self._acceso_rango(tabla, where)
         if self._es_espacial(where):
             seleccion = self._selectividad_espacial(tabla, where)
             fallback = self._filtro_espacial(planner.acceso(tabla, None), tabla, where, seleccion)
@@ -421,6 +431,13 @@ class Executor(Visitor):
             columna = columna.split(".", 1)[1]
         columna = self._columna(tabla, columna)
         return Compare(columna, where.op, self._convertir(tabla, columna, where.value))
+
+    def _acceso_rango(self, tabla, where):
+        if isinstance(where.column, Distance):
+            raise SemanticError("BETWEEN con distancia aún no está soportado")
+        bajo = self._condicion_simple(tabla, Compare(where.column, ">=", where.low))
+        alto = self._condicion_simple(tabla, Compare(where.column, "<=", where.high))
+        return planner.filtrar(planner.acceso(tabla, bajo), alto)
 
     def _selectividad_espacial(self, tabla, where):
         perfil = Perfil(tabla)
