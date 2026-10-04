@@ -274,7 +274,7 @@ class Executor(Visitor):
                 key_fn = self._distancia(tabla, orden, disponibles)
                 indice = None
                 texto = PrintVisitor().visit_Distance(orden)
-                if node.join is None and node.limit is not None and not node.order_desc and node.group_by is None and node.aggregates is None:
+                if not node.joins and node.limit is not None and not node.order_desc and node.group_by is None and node.aggregates is None:
                     actual = self._tabla(node.table)
                     expresion = self._sin_alias(orden, node.table_alias or node.table)
                     target = self._objetivo_espacial(actual, expresion)
@@ -300,25 +300,25 @@ class Executor(Visitor):
 
     def _fuente_select(self, node):
         izquierda = self._tabla(node.table)
-        derecha = None if node.join is None else self._tabla(node.join.table)
-        for tabla in sorted([izquierda] + ([] if derecha is None else [derecha]), key=lambda t: t.name):
+        lados = [(izquierda, node.table_alias or node.table)]
+        for join in node.joins:
+            lados.append((self._tabla(join.table), join.alias or join.table))
+        for tabla in sorted({tabla.name: tabla for tabla, _ in lados}.values(), key=lambda t: t.name):
             self._bloquear_tabla(tabla, LockMode.PS)
         referencias = list(node.columns or []) + [arg for _, arg in node.aggregates or [] if arg is not None]
         for expresion in (node.group_by, node.order_by):
             referencias.extend(expression_columns(expresion))
         referencias.extend(condition_columns(node.where))
-        if derecha is None and node.table_alias is None and not any("." in c for c in referencias):
+        if not node.joins and node.table_alias is None and not any("." in c for c in referencias):
             return self._acceso(izquierda, node.where), izquierda
 
-        lados = [(izquierda, node.table_alias or node.table)]
-        if derecha is not None:
-            lados.append((derecha, node.join.alias or node.join.table))
         if len({prefijo for _, prefijo in lados}) != len(lados):
             raise SemanticError("JOIN requiere nombres o alias de tabla distintos")
         columnas = [prefijo + "." + c for tabla, prefijo in lados for c in tabla.columns]
         fuente = Table(" JOIN ".join(prefijo for _, prefijo in lados), columnas)
         fuente.column_types = {prefijo + "." + c: {"int": "INT", "float": "FLOAT", "str": "VARCHAR", "point": "POINT"}[self._tipo_columna(tabla, c)] for tabla, prefijo in lados for c in tabla.columns}
         fuente.spatial_sources = {prefijo + "." + c: (tabla.name, c) for tabla, prefijo in lados for c in tabla.columns if self._tipo_columna(tabla, c) == "point"}
+        fuente.estadisticas = {"columnas": {prefijo + "." + c: info for tabla, prefijo in lados for c, info in ((getattr(tabla, "estadisticas", None) or {}).get("columnas") or {}).items()}}
         fuente.column_aliases = {}
         fuente.ambiguous_columns = set()
         for tabla, prefijo in lados:
@@ -326,42 +326,69 @@ class Executor(Visitor):
                 if c in fuente.column_aliases:
                     fuente.ambiguous_columns.add(c)
                 fuente.column_aliases[c] = prefijo + "." + c
-        if derecha is None:
-            prefijo = lados[0][1]
-            simple = self._mapear_condicion(node.where, lambda c: self._columna(fuente, c).split(".", 1)[1], lambda e: self._sin_alias(e, prefijo))
-            raiz = Calificar(self._acceso(izquierda, simple), prefijo, izquierda.columns)
-            return raiz, fuente
 
-        condicion = None
-        espacial = self._es_espacial(node.where)
-        compuesta = node.where is not None and not espacial and not isinstance(node.where, Compare)
-        if node.where is not None and not espacial and not compuesta:
-            columna = self._columna(fuente, node.where.column)
-            condicion = Compare(columna, node.where.op, self._valor_comparable(fuente, columna, node.where.value))
+        partes = [] if node.where is None else list(node.where.conditions) if isinstance(node.where, And) else [node.where]
+        propias = {prefijo: [] for _, prefijo in lados}
+        globales = []
+        for parte in partes:
+            prefijos = self._prefijos(fuente, parte)
+            if len(prefijos) == 1:
+                propias[prefijos.pop()].append(parte)
+            else:
+                globales.append(parte)
 
-        clave_izq = self._columna(fuente, node.join.left_column)
-        clave_der = self._columna(fuente, node.join.right_column)
-        if clave_izq.startswith(lados[1][1] + "."):
-            clave_izq, clave_der = clave_der, clave_izq
-        if not clave_izq.startswith(lados[0][1] + ".") or not clave_der.startswith(lados[1][1] + "."):
-            raise SemanticError("ON debe comparar una columna de cada tabla")
-        tipo_izq = self._tipo_columna(fuente, clave_izq)
-        tipo_der = self._tipo_columna(fuente, clave_der)
-        if tipo_izq != tipo_der and {tipo_izq, tipo_der} != {"int", "float"}:
-            raise SemanticError("las columnas de JOIN deben tener tipos compatibles")
-        raiz = planner.unir(
-            Calificar(planner.acceso(izquierda, None), lados[0][1], izquierda.columns),
-            Calificar(planner.acceso(derecha, None), lados[1][1], derecha.columns),
-            clave_izq, clave_der, MEM_BUDGET,
-        )
-        if condicion is not None:
-            raiz = planner.filtrar(raiz, condicion)
-        elif espacial:
-            raiz = self._filtro_espacial(raiz, fuente, node.where)
-        elif compuesta:
-            predicado, seleccion = self._predicado(fuente, node.where)
+        def acceso(tabla, prefijo):
+            condiciones = [self._mapear_condicion(c, lambda n: self._en_tabla(fuente, n), lambda e: self._distancia_en_tabla(fuente, e)) for c in propias[prefijo]]
+            condicion = None if not condiciones else condiciones[0] if len(condiciones) == 1 else And(tuple(condiciones))
+            return Calificar(self._acceso(tabla, condicion), prefijo, tabla.columns)
+
+        raiz = acceso(*lados[0])
+        anteriores = {lados[0][1]}
+        for join, (tabla, prefijo) in zip(node.joins, lados[1:]):
+            claves = [self._columna(fuente, join.left_column), self._columna(fuente, join.right_column)]
+            if claves[0].startswith(prefijo + "."):
+                claves.reverse()
+            clave_anterior, clave_nueva = claves
+            if not clave_nueva.startswith(prefijo + ".") or clave_anterior.split(".", 1)[0] not in anteriores:
+                raise SemanticError(f"el ON de '{prefijo}' debe comparar una columna de '{prefijo}' con una de las tablas anteriores ({', '.join(sorted(anteriores))})")
+            tipo_anterior = self._tipo_columna(fuente, clave_anterior)
+            tipo_nuevo = self._tipo_columna(fuente, clave_nueva)
+            if tipo_anterior != tipo_nuevo and {tipo_anterior, tipo_nuevo} != {"int", "float"}:
+                raise SemanticError("las columnas de JOIN deben tener tipos compatibles")
+            distintos = (self._distintos(lados, clave_anterior), self._distintos(lados, clave_nueva))
+            raiz = planner.unir(raiz, acceso(tabla, prefijo), clave_anterior, clave_nueva, MEM_BUDGET, distintos)
+            anteriores.add(prefijo)
+
+        if globales:
+            predicado, seleccion = self._predicado(fuente, globales[0] if len(globales) == 1 else And(tuple(globales)))
             raiz = planner.filtrar(raiz, predicado, selectividad=seleccion)
         return raiz, fuente
+
+    @staticmethod
+    def _es_columna(fuente, nombre):
+        return nombre in fuente.columns or nombre in fuente.column_aliases
+
+    def _prefijos(self, fuente, condicion):
+        prefijos = set()
+        for nombre in condition_columns(condicion):
+            if self._es_columna(fuente, nombre) or "." in nombre or nombre not in self.parameters:
+                prefijos.add(self._columna(fuente, nombre).split(".", 1)[0])
+        return prefijos
+
+    def _en_tabla(self, fuente, nombre):
+        return self._columna(fuente, nombre).split(".", 1)[1]
+
+    def _distancia_en_tabla(self, fuente, expresion):
+        def operando(valor):
+            if isinstance(valor, str) and self._es_columna(fuente, valor):
+                return self._en_tabla(fuente, valor)
+            return valor
+        return replace(expresion, left=operando(expresion.left), right=operando(expresion.right))
+
+    def _distintos(self, lados, clave):
+        prefijo, columna = clave.split(".", 1)
+        tabla = next(t for t, p in lados if p == prefijo)
+        return Perfil(tabla).n_distinct(columna)
 
     def _mapear_condicion(self, condicion, columna, distancia):
         if condicion is None:

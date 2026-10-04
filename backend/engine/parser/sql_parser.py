@@ -106,7 +106,7 @@ class Parser:
             f"EXPLAIN, ANALYZE o BEGIN, se encontró {self._encontrado()}"
         )
 
-    # select -> SELECT select_list FROM table [alias] [JOIN table [alias] ON col = col] [where] [group] [order]
+    # select -> SELECT select_list FROM table [alias] { [INNER] JOIN table [alias] ON col = col } [where] [group] [order]
     def _select(self):
         projection = None
         if self._match(TokenType.STAR):
@@ -124,18 +124,20 @@ class Parser:
         self._expect(TokenType.FROM, "FROM")
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
         alias = self._table_alias()
-        join = None
-        inner = self._match(TokenType.INNER)
-        if inner:
-            self._expect(TokenType.JOIN, "JOIN")
-        if inner or self._match(TokenType.JOIN):
+        joins = []
+        while True:
+            inner = self._match(TokenType.INNER)
+            if inner:
+                self._expect(TokenType.JOIN, "JOIN")
+            elif not self._match(TokenType.JOIN):
+                break
             otra = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
             otro_alias = self._table_alias()
             self._expect(TokenType.ON, "ON")
             izquierda = self._column_name()
             self._expect(TokenType.EQUAL, "'=' en JOIN")
             derecha = self._column_name()
-            join = Join(otra, izquierda, derecha, otro_alias)
+            joins.append(Join(otra, izquierda, derecha, otro_alias))
 
         condicion = None
         if self._match(TokenType.WHERE):
@@ -165,7 +167,7 @@ class Parser:
                 raise ParseError(f"Línea {token.line}: LIMIT debe ser un entero entre 0 y {sys.maxsize}")
 
         return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by,
-                      aggregates=agregados, order_desc=order_desc, table_alias=alias, join=join, projection=projection, limit=limit)
+                      aggregates=agregados, order_desc=order_desc, table_alias=alias, joins=joins, projection=projection, limit=limit)
 
     def _expression(self):
         nombre = self._column_name()

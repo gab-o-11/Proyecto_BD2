@@ -69,6 +69,7 @@ IDA_Y_VUELTA = [
     "SELECT * FROM t WHERE id BETWEEN 10 AND 20",
     "SELECT * FROM t WHERE id BETWEEN -5 AND 5 ORDER BY id DESC LIMIT 3",
     "DELETE FROM t WHERE fecha BETWEEN '2026-01-01' AND '2026-12-31'",
+    "SELECT c.id, t.nombre FROM c JOIN p ON c.id = p.cliente_id JOIN t ON p.tienda_id = t.id WHERE c.distrito = t.distrito",
 ]
 
 MENSAJES = [

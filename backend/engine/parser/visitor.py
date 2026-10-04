@@ -52,11 +52,11 @@ class PrintVisitor(Visitor):
         sql = f"SELECT {', '.join(items)} FROM {node.table}"
         if node.table_alias is not None:
             sql += f" AS {node.table_alias}"
-        if node.join is not None:
-            sql += f" JOIN {node.join.table}"
-            if node.join.alias is not None:
-                sql += f" AS {node.join.alias}"
-            sql += f" ON {node.join.left_column} = {node.join.right_column}"
+        for join in node.joins:
+            sql += f" JOIN {join.table}"
+            if join.alias is not None:
+                sql += f" AS {join.alias}"
+            sql += f" ON {join.left_column} = {join.right_column}"
 
         if node.where is not None:
             sql += " WHERE " + node.where.accept(self)

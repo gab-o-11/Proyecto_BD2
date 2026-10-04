@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 class Node:
@@ -114,7 +114,7 @@ class Select(Node):
     aggregates: Optional[List[tuple]] = None
     order_desc: bool = False
     table_alias: Optional[str] = None
-    join: Optional["Join"] = None
+    joins: List["Join"] = field(default_factory=list)
     projection: Optional[List[str]] = None
     limit: Optional[int] = None
 
