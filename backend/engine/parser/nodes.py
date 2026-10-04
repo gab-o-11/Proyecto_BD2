@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 class Node:
@@ -34,6 +34,11 @@ def expression_columns(expression):
     if isinstance(expression, Distance):
         return [operand for operand in (expression.left, expression.right) if isinstance(operand, str)]
     return [expression] if isinstance(expression, str) else []
+
+@dataclass(frozen=True)
+class ColumnRef(Node):
+    name: str
+
 
 @dataclass
 class Compare(Node):
@@ -94,7 +99,10 @@ def condition_columns(condition):
         return condition_columns(condition.condition)
     if isinstance(condition, Intersection):
         return [condition.column]
-    return expression_columns(condition.column)
+    columnas = expression_columns(condition.column)
+    if isinstance(getattr(condition, "value", None), ColumnRef):
+        columnas.append(condition.value.name)
+    return columnas
 
 @dataclass
 class Select(Node):
@@ -106,7 +114,7 @@ class Select(Node):
     aggregates: Optional[List[tuple]] = None
     order_desc: bool = False
     table_alias: Optional[str] = None
-    join: Optional["Join"] = None
+    joins: List["Join"] = field(default_factory=list)
     projection: Optional[List[str]] = None
     limit: Optional[int] = None
 

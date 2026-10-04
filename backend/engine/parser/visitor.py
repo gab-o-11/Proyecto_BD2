@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from .nodes import And, Distance, Or, Point, aggregate_name
+from .nodes import And, ColumnRef, Distance, Or, Point, aggregate_name
 
 
 class Visitor(ABC):
@@ -52,11 +52,11 @@ class PrintVisitor(Visitor):
         sql = f"SELECT {', '.join(items)} FROM {node.table}"
         if node.table_alias is not None:
             sql += f" AS {node.table_alias}"
-        if node.join is not None:
-            sql += f" JOIN {node.join.table}"
-            if node.join.alias is not None:
-                sql += f" AS {node.join.alias}"
-            sql += f" ON {node.join.left_column} = {node.join.right_column}"
+        for join in node.joins:
+            sql += f" JOIN {join.table}"
+            if join.alias is not None:
+                sql += f" AS {join.alias}"
+            sql += f" ON {join.left_column} = {join.right_column}"
 
         if node.where is not None:
             sql += " WHERE " + node.where.accept(self)
@@ -134,6 +134,8 @@ class PrintVisitor(Visitor):
     def _literal(valor):
         if valor is None:
             return "NULL"
+        if isinstance(valor, ColumnRef):
+            return valor.name
         if isinstance(valor, Point):
             return PrintVisitor().visit_Point(valor)
         return "'" + valor.replace("'", "''") + "'" if isinstance(valor, str) else str(valor)

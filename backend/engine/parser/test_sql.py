@@ -115,6 +115,23 @@ def main():
         assert any(p["op"] == "Join" and p["method"] == "external-hash" for p in resultado["plan"])
         agrupado = run(executor, "SELECT a.valor, SUM(b.valor) FROM a JOIN b ON a.id = b.id GROUP BY a.valor ORDER BY a.valor")
         assert [(r["a.valor"], r["sum_b.valor"]) for r in agrupado["rows"]] == reference.execute("SELECT a.valor, SUM(b.valor) FROM a JOIN b ON a.id = b.id GROUP BY a.valor ORDER BY a.valor").fetchall()
+    tercera = Table("c", ["id", "grupo"], column_types={"id": "INT", "grupo": "INT"})
+    for i in range(0, 100, 3):
+        tercera.insert({"id": i, "grupo": i % 4})
+    executor.catalog["c"] = tercera
+    with sqlite3.connect(":memory:") as reference:
+        reference.executescript("CREATE TABLE a (id INT, valor INT); CREATE TABLE b (id INT, valor INT); CREATE TABLE c (id INT, grupo INT);")
+        reference.executemany("INSERT INTO a VALUES (?, ?)", [(r["id"], r["valor"]) for r in izquierda.rows])
+        reference.executemany("INSERT INTO b VALUES (?, ?)", [(r["id"], r["valor"]) for r in derecha.rows])
+        reference.executemany("INSERT INTO c VALUES (?, ?)", [(r["id"], r["grupo"]) for r in tercera.rows])
+        for sql in (
+            "SELECT a.id, b.valor, c.grupo FROM a JOIN b ON a.id = b.id JOIN c ON c.id = b.id WHERE b.valor > 10 AND c.grupo < 3",
+            "SELECT a.id, b.valor, c.grupo FROM a JOIN b ON a.id = b.id JOIN c ON c.id = a.id WHERE a.valor = c.grupo OR b.valor < 6",
+        ):
+            assert sorted(tuple(r.values()) for r in run(executor, sql)["rows"]) == sorted(reference.execute(sql).fetchall()), sql
+    plan = run(executor, "EXPLAIN SELECT * FROM a JOIN b ON a.id = b.id JOIN c ON b.id = c.id WHERE a.valor = 3")["explain"]["tree"]
+    assert plan["node"] == "Hash Join" and plan["children"][0]["node"] == "Hash Join"
+    assert "anteriores" in error(executor, "SELECT * FROM a JOIN b ON a.id = b.id JOIN c ON a.id = b.valor")
     assert "ambigua" in error(executor, "SELECT id FROM a JOIN b ON a.id = b.id")
     error(executor, "SELECT * FROM a JOIN b ON a.id = a.valor")
     assert run(executor, "SELECT x.id FROM a x JOIN a y ON x.id = y.id")["columns"] == ["x.id"]
