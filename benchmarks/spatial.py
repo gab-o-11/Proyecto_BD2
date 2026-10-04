@@ -89,15 +89,14 @@ def plot(output, summary, construction):
     for method in ("rtree", "gist"):
         rows = [r for r in construction if r["metodo"] == method]
         axes[0].plot([r["n"] for r in rows], [r["construccion_ms"] for r in rows], "o-", label=method, color=colors[method])
-    rows = [r for r in construction if r["metodo"] == "rtree"]
-    axes[1].plot([r["n"] for r in rows], [r["indice_ram_bytes"] / 2**20 for r in rows], "o-", label="R-Tree: RAM Python", color=colors["rtree"])
     rows = [r for r in construction if r["metodo"] == "gist"]
     if all(r.get("gist_cache_bytes", "") != "" for r in rows):
         axes[1].plot([r["n"] for r in rows], [r["gist_cache_bytes"] / 2**20 for r in rows], "o-", label="GiST: páginas en caché", color=colors["gist"])
     axes[2].plot([r["n"] for r in rows], [r["indice_disco_bytes"] / 2**20 for r in rows], "o-", label="GiST: archivo del índice", color=colors["gist"])
-    axes[2].plot([r["n"] for r in rows], [0 for r in rows], "o-", label="R-Tree: índice volátil", color=colors["rtree"])
+    rtree_rows = [r for r in construction if r["metodo"] == "rtree"]
+    axes[2].plot([r["n"] for r in rtree_rows], [r["indice_disco_bytes"] / 2**20 for r in rtree_rows], "o-", label="R-Tree: archivo .nodes + .meta", color=colors["rtree"])
     axes[0].set(xscale="log", yscale="log", xlabel="Número de puntos", ylabel="Construcción (ms)", title="Construcción del índice")
-    axes[1].set(xscale="log", xlabel="Número de puntos", ylabel="MiB", title="RAM del índice (medidas distintas)")
+    axes[1].set(xscale="log", xlabel="Número de puntos", ylabel="MiB", title="Caché del índice GiST")
     axes[2].set(xscale="log", xlabel="Número de puntos", ylabel="MiB", title="Disco del índice")
     for ax in axes:
         ax.legend()
@@ -157,12 +156,9 @@ def main():
                         points = all_points[:n]
                         seen = set()
                         data_ram = deep_size(points, seen)
-                        tree = RTree()
-                        def build_tree():
-                            for identity, coordinates in points:
-                                tree.insert(coordinates, identity)
-                        _, tree_build = elapsed(build_tree)
-                        tree_ram = deep_size(tree, seen)
+                        tree = RTree(os.path.join(work, f"rtree_{n}"))
+                        _, tree_build = elapsed(lambda: tree.bulk_load([(coordinates, identity) for identity, coordinates in points]))
+                        tree_disk = tree.bytes_en_disco()
                         cursor.execute("DROP TABLE IF EXISTS puntos; CREATE TABLE puntos (id integer, lat float8, lon float8, loc earth GENERATED ALWAYS AS (ll_to_earth(lat, lon)) STORED)")
                         buffer = io.StringIO()
                         csv.writer(buffer, lineterminator="\n").writerows((i, *p) for i, p in points)
@@ -173,7 +169,7 @@ def main():
                         cursor.execute("ANALYZE puntos")
                         cursor.execute("SELECT pg_relation_size('puntos'), pg_relation_size('puntos_gist')")
                         pg_data, pg_index = cursor.fetchone()
-                        for method, build, ram, disk in (("secuencial", 0, 0, 0), ("rtree", tree_build, tree_ram, 0), ("gist", gist_build, "", pg_index)):
+                        for method, build, ram, disk in (("secuencial", 0, 0, 0), ("rtree", tree_build, 0, tree_disk), ("gist", gist_build, "", pg_index)):
                             construction.append({"n": n, "metodo": method, "construccion_ms": build,
                                                  "datos_python_ram_bytes": data_ram if method != "gist" else "",
                                                  "indice_ram_bytes": ram, "indice_disco_bytes": disk,
