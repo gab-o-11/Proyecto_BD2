@@ -6,6 +6,7 @@ import ResultsPanel from './components/ResultsPanel'
 import PlanPanel from './components/PlanPanel'
 import MapPanel from './components/MapPanel'
 import IndexPanel from './components/IndexPanel'
+import ExplainTree from './components/ExplainTree'
 
 export default function App() {
   const [tables, setTables] = useState([])
@@ -24,6 +25,8 @@ export default function App() {
     setLoading(true)
     const res = await runQuery(sql, { mi_ubicacion: location })
     setResult(res)
+    if (res.explain && !res.error) setVista('plan')
+    else if (vista === 'plan') setVista('resultados')
     if (res.statements?.some(s => ['insert', 'update', 'delete', 'create'].includes(s.type))) setDataVersion(v => v + 1)
     setLoading(false)
     listTables().then(setTables)
@@ -56,9 +59,11 @@ export default function App() {
             <div className="stack">
               <div className="tabbar">
                 <button className={vista === 'resultados' ? 'tab active' : 'tab'} onClick={() => setVista('resultados')}>Resultados</button>
+                <button className={vista === 'plan' ? 'tab active' : 'tab'} onClick={() => setVista('plan')}>Plan</button>
                 <button className={vista === 'indices' ? 'tab active' : 'tab'} onClick={() => setVista('indices')}>Índices</button>
               </div>
               {vista === 'resultados' && <ResultsPanel result={result} />}
+              {vista === 'plan' && <ExplainTree result={result} />}
               {vista === 'indices' && <IndexPanel tables={tables} result={result} onRectangulos={setRectangulos} />}
             </div>
             <PlanPanel result={result} />
