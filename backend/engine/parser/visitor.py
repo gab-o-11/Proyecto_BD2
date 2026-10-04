@@ -42,7 +42,6 @@ class PrintVisitor(Visitor):
 
         sql = f"SELECT {', '.join(items)} FROM {node.table}"
 
-
         if node.where is not None:
             sql += " WHERE " + node.where.accept(self)
         if node.group_by is not None:
@@ -73,7 +72,10 @@ class PrintVisitor(Visitor):
 
     def visit_CreateTable(self, node):
         columnas = ", ".join(c.accept(self) for c in node.columns)
-        return f"CREATE TABLE {node.table} ({columnas})"
+        sql = f"CREATE TABLE {node.table} ({columnas})"
+        if node.index_kind is not None:
+            sql += f" USING {node.index_kind}"
+        return sql
 
     def visit_ColumnDef(self, node):
         tam = f"({node.size})" if node.size is not None else ""
