@@ -164,9 +164,14 @@ class Executor(Visitor):
 
     def _plan_delete(self, node):
         tabla = self._tabla(node.table)
-        self._bloquear_tabla(tabla, LockMode.PX)
+        self._bloquear_tabla(tabla, LockMode.PU)
         hijo = self._acceso(tabla, node.where)
-        return planner.modificar("Delete", tabla, hijo, tabla.remove, "lazy", tabla.name)
+
+        def aplicar(filas):
+            self._bloquear_tabla(tabla, LockMode.PX)
+            return tabla.remove(filas)
+
+        return planner.modificar("Delete", tabla, hijo, aplicar, "lazy", tabla.name)
 
     def visit_Delete(self, node):
         raiz = self._plan_delete(node)
@@ -671,12 +676,13 @@ class Executor(Visitor):
 
     def _plan_update(self, node):
         tabla = self._tabla(node.table)
-        self._bloquear_tabla(tabla, LockMode.PX)
+        self._bloquear_tabla(tabla, LockMode.PU)
         for columna, _ in node.assignments:
             self._columna(tabla, columna)
         hijo = self._acceso(tabla, node.where)
 
         def aplicar(filas):
+            self._bloquear_tabla(tabla, LockMode.PX)
             nuevas = [self._validar_fila(tabla, dict(fila, **dict(node.assignments))) for fila in filas]
             self._validar_claves(tabla, nuevas, filas)
             if isinstance(tabla, StorageTable):
