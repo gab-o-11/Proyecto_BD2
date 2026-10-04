@@ -32,6 +32,8 @@ class TokenType(Enum):
     DESC = auto()
     LIMIT = auto()
     POINT = auto()
+    BETWEEN = auto()
+    AND = auto()
 
     ## Restricciones de columna (CREATE TABLE)
     PRIMARY = auto()
@@ -110,6 +112,8 @@ KEYWORDS = {
     "KEY": TokenType.KEY,
     "NOT": TokenType.NOT,
     "NULL": TokenType.NULL,
+    "BETWEEN": TokenType.BETWEEN,
+    "AND": TokenType.AND,
 
 }
 
