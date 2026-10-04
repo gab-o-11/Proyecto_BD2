@@ -244,12 +244,13 @@ class StorageTable(SpatialTable):
             values = [tuple(self._to_tuple(row)) for row in rows]
             self.seq.bulk_load(values)
             self.index.rebuild()
-            return len(rows)
-        pairs = []
-        for row in rows:
-            rid = self.heap.insert(*self._to_tuple(row))
-            pairs.append((row[self.index_field], as_pair(rid)))
-        self.index.bulk_load(pairs)
+        else:
+            pairs = []
+            for row in rows:
+                rid = self.heap.insert(*self._to_tuple(row))
+                pairs.append((row[self.index_field], as_pair(rid)))
+            self.index.bulk_load(pairs)
+        self.analyze()
         return len(rows)
 
     @staticmethod
