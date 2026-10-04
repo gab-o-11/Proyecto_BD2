@@ -205,9 +205,11 @@ class Parser:
             tam = int(self._expect(TokenType.INT, "tamaño del VARCHAR").lexeme)
             self._expect(TokenType.RPAREN, "')'")
             tipo = "VARCHAR"
+        elif self._match(TokenType.DATE_TYPE):
+            tipo, tam = "DATE", None
         else:
             raise ParseError(
-                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT o VARCHAR), "
+                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR o DATE), "
                 f"se encontró '{self.current.lexeme}'"
             )
         primary_key, not_null = self._column_constraints()
