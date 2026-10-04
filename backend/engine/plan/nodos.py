@@ -1,13 +1,16 @@
 import math
 import operator
 import time
+from contextlib import closing
+from itertools import islice
 
 from ..common import io_stats
 from ..external import external_sort
-from ..hashing import external_group_by
+from ..hashing import external_group_by, grace_hash_join
 
 COMPARADORES = {
     "=": operator.eq, "!=": operator.ne,
+    "<>": operator.ne,
     "<": operator.lt, "<=": operator.le,
     ">": operator.gt, ">=": operator.ge,
 }
@@ -88,22 +91,25 @@ class Nodo:
         instrumento = Instrumento()
         self.real = instrumento
         generador = self.producir()
-        while True:
-            io_stats.activar(instrumento.io)
-            comienzo = time.perf_counter()
-            try:
-                fila = next(generador, _FIN)
-            finally:
-                instrumento.total += time.perf_counter() - comienzo
-                io_stats.desactivar(instrumento.io)
-            if fila is _FIN:
-                break
+        try:
+            while True:
+                io_stats.activar(instrumento.io)
+                comienzo = time.perf_counter()
+                try:
+                    fila = next(generador, _FIN)
+                finally:
+                    instrumento.total += time.perf_counter() - comienzo
+                    io_stats.desactivar(instrumento.io)
+                if fila is _FIN:
+                    break
+                if instrumento.inicio is None:
+                    instrumento.inicio = instrumento.total
+                instrumento.filas += 1
+                yield fila
+        finally:
+            generador.close()
             if instrumento.inicio is None:
                 instrumento.inicio = instrumento.total
-            instrumento.filas += 1
-            yield fila
-        if instrumento.inicio is None:
-            instrumento.inicio = instrumento.total
 
     def traza(self):
         pasos = []
@@ -120,6 +126,45 @@ def base_de(tabla):
     if getattr(tabla, "is_clustered", False):
         return "sequential"
     return "heap"
+
+
+class SpatialIndexScan(Nodo):
+    tipo = "Spatial Index Scan"
+
+    def __init__(self, tabla, column, operation, query, detail, limit=None):
+        super().__init__()
+        self.tabla = tabla
+        self.column = column
+        self.operation = operation
+        self.query = query
+        self.detail = detail
+        from .costos import Perfil
+        perfil = Perfil(tabla)
+        rows = min(perfil.filas, limit) if limit is not None else max(1, perfil.filas // 3)
+        # ponytail: estimación heurística; histograma espacial si se requiere costeo fino.
+        self.estimar(0, math.log2(perfil.filas + 1) + rows * 0.01, rows, perfil.ancho)
+
+    def titulo(self):
+        return "Spatial Index Scan using " + self.indice() + " on " + self.tabla.name
+
+    def relacion(self):
+        return self.tabla.name
+
+    def indice(self):
+        return self.tabla.name + "_" + self.column + "_rtree"
+
+    def detalles(self):
+        return ["Spatial Cond: " + self.detail, "Search: " + self.operation]
+
+    def producir(self):
+        for rid in self.query():
+            row = self.tabla.spatial_row(rid)
+            if row is not None:
+                yield row
+
+    def paso(self):
+        return {"op": self.tipo, "method": "RTREE-" + self.operation,
+                "detail": self.detail, "rows": 0}
 
 
 class SeqScan(Nodo):
@@ -217,25 +262,110 @@ class IndexScan(Nodo):
 class Sort(Nodo):
     tipo = "Sort"
 
-    def __init__(self, hijo, clave, memoria):
+    def __init__(self, hijo, clave, memoria, reverse=False, key_fn=None):
         super().__init__([hijo])
         self.clave = clave
         self.memoria = memoria
+        self.reverse = reverse
+        self.key_fn = key_fn or operator.itemgetter(clave)
 
     def detalles(self):
-        return ["Sort Key: " + self.clave]
+        return ["Sort Key: " + self.clave + (" DESC" if self.reverse else "")]
 
     def detalles_reales(self):
         if self.real is None:
             return []
-        runs = max(1, math.ceil(self.real.filas / self.memoria))
+        entrada = self.hijos[0].real
+        runs = max(1, math.ceil((entrada.filas if entrada is not None else self.real.filas) / self.memoria))
         return ["Sort Method: external k-way merge  Runs: " + str(runs) + "  Memory: " + str(self.memoria) + " rows"]
 
     def producir(self):
-        yield from external_sort(self.hijos[0].iterar(), key_fn=operator.itemgetter(self.clave), mem_budget=self.memoria)
+        yield from external_sort(self.hijos[0].iterar(), key_fn=self.key_fn, mem_budget=self.memoria, reverse=self.reverse)
 
     def paso(self):
-        return {"op": "Order By", "method": "external-merge", "detail": self.clave}
+        return {"op": "Order By", "method": "external-merge", "detail": self.clave + (" DESC" if self.reverse else "")}
+
+
+class Calificar(Nodo):
+    tipo = "Projection"
+
+    def __init__(self, hijo, prefijo, columnas):
+        super().__init__([hijo])
+        self.prefijo = prefijo
+        self.columnas = columnas
+        self.estimar(hijo.costo_inicio, hijo.costo_total, hijo.filas_est, hijo.ancho)
+
+    def producir(self):
+        for fila in self.hijos[0].iterar():
+            yield {self.prefijo + "." + columna: fila[columna] for columna in self.columnas}
+
+
+class HashJoin(Nodo):
+    tipo = "Hash Join"
+
+    def __init__(self, izquierda, derecha, clave_izquierda, clave_derecha, memoria):
+        super().__init__([izquierda, derecha])
+        self.clave_izquierda = clave_izquierda
+        self.clave_derecha = clave_derecha
+        self.memoria = memoria
+
+    def detalles(self):
+        return [f"Hash Cond: {self.clave_izquierda} = {self.clave_derecha}", f"Memory: {self.memoria} keys"]
+
+    def producir(self):
+        for izquierda, derecha in grace_hash_join(
+            self.hijos[0].iterar(), self.hijos[1].iterar(),
+            operator.itemgetter(self.clave_izquierda), operator.itemgetter(self.clave_derecha),
+            mem_budget=self.memoria,
+        ):
+            yield dict(izquierda, **derecha)
+
+    def paso(self):
+        return {"op": "Join", "method": "external-hash", "detail": f"{self.clave_izquierda} = {self.clave_derecha}"}
+
+
+class Filtro(Nodo):
+    tipo = "Filter"
+
+    def __init__(self, hijo, condicion, key_fn=None, detail=None):
+        super().__init__([hijo])
+        self.condicion = condicion
+        self.key_fn = key_fn or operator.itemgetter(condicion.column)
+        self.detail = detail or condicion_texto(condicion)
+        self.spatial = key_fn is not None
+        self.method = "sequential-distance" if self.spatial else "comparison"
+        if self.spatial:
+            self.tipo = "Spatial Filter"
+
+    def detalles(self):
+        return ["Filter: " + self.detail]
+
+    def producir(self):
+        comparar = COMPARADORES[self.condicion.op]
+        for fila in self.hijos[0].iterar():
+            if comparar(self.key_fn(fila), self.condicion.value):
+                yield fila
+
+    def paso(self):
+        return {"op": self.tipo, "method": self.method, "detail": self.detail}
+
+
+class Limite(Nodo):
+    tipo = "Limit"
+
+    def __init__(self, hijo, cantidad):
+        super().__init__([hijo])
+        self.cantidad = cantidad
+
+    def detalles(self):
+        return ["Limit: " + str(self.cantidad)]
+
+    def producir(self):
+        with closing(self.hijos[0].iterar()) as filas:
+            yield from islice(filas, self.cantidad)
+
+    def paso(self):
+        return {"op": "Limit", "method": "stream", "detail": str(self.cantidad)}
 
 
 class Agregacion(Nodo):
@@ -276,8 +406,8 @@ class Agregacion(Nodo):
             for i in range(len(self.nombres)):
                 fila[self.nombres[i]] = valores[i]
         if not fila:
-            for nombre in self.nombres:
-                fila[nombre] = 0
+            for nombre, (func, _) in zip(self.nombres, self.specs):
+                fila[nombre] = 0 if func == "count" else None
         yield fila
 
     def paso(self):

@@ -1,6 +1,6 @@
 from . import costos
 from .costos import Perfil, ajustar_filas
-from .nodos import Agregacion, IndexScan, Modificar, Resultado, SeqScan, Sort
+from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Resultado, SeqScan, Sort
 
 DESIGUALDADES = (">", ">=", "<", "<=")
 
@@ -48,9 +48,29 @@ def agregar(hijo, tabla, agrupar, specs, nombres, memoria):
     return Agregacion(hijo, agrupar, specs, nombres, memoria).estimar(inicio, total, grupos, ancho)
 
 
-def ordenar(hijo, clave, memoria):
+def ordenar(hijo, clave, memoria, reverse=False, key_fn=None):
     inicio, total = costos.costo_sort(hijo.costo_total, hijo.filas_est, hijo.ancho, memoria)
-    return Sort(hijo, clave, memoria).estimar(inicio, total, hijo.filas_est, hijo.ancho)
+    return Sort(hijo, clave, memoria, reverse, key_fn).estimar(inicio, total, hijo.filas_est, hijo.ancho)
+
+
+def limitar(hijo, cantidad):
+    filas = min(cantidad, hijo.filas_est)
+    fraccion = min(1.0, cantidad / max(1, hijo.filas_est))
+    total = hijo.costo_inicio + (hijo.costo_total - hijo.costo_inicio) * fraccion
+    return Limite(hijo, cantidad).estimar(hijo.costo_inicio, total, filas, hijo.ancho)
+
+
+def unir(izquierda, derecha, clave_izquierda, clave_derecha, memoria):
+    inicio = izquierda.costo_total + derecha.costo_total
+    filas = ajustar_filas(izquierda.filas_est * derecha.filas_est * costos.DEFAULT_EQ_SEL)
+    total = inicio + (izquierda.filas_est + derecha.filas_est + filas) * costos.CPU_TUPLE_COST
+    return HashJoin(izquierda, derecha, clave_izquierda, clave_derecha, memoria).estimar(inicio, total, filas, izquierda.ancho + derecha.ancho)
+
+
+def filtrar(hijo, condicion, key_fn=None, detail=None):
+    total = hijo.costo_total + hijo.filas_est * costos.CPU_OPERATOR_COST
+    filas = ajustar_filas(hijo.filas_est * costos.DEFAULT_EQ_SEL)
+    return Filtro(hijo, condicion, key_fn, detail).estimar(hijo.costo_inicio, total, filas, hijo.ancho)
 
 
 def modificar(accion, tabla, hijo, aplicar, metodo, detalle):

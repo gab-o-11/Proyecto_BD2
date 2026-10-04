@@ -5,9 +5,39 @@ class Node:
     def accept(self, visitor):
         return getattr(visitor, "visit_" + type(self).__name__)(self)
 
+
+@dataclass(frozen=True)
+class Point(Node):
+    latitude: float
+    longitude: float
+
+
+@dataclass(frozen=True)
+class Distance(Node):
+    left: str | Point
+    right: str | Point
+    metric: str = "haversine"
+
+
+@dataclass(frozen=True)
+class Polygon(Node):
+    vertices: tuple[Point, ...]
+
+
+@dataclass(frozen=True)
+class Intersection(Node):
+    column: str
+    polygon: Polygon
+
+
+def expression_columns(expression):
+    if isinstance(expression, Distance):
+        return [operand for operand in (expression.left, expression.right) if isinstance(operand, str)]
+    return [expression] if isinstance(expression, str) else []
+
 @dataclass
 class Compare(Node):
-    column: str
+    column: str | Distance
     op: str
     value: str
 
@@ -15,10 +45,27 @@ class Compare(Node):
 class Select(Node):
     table: str
     columns: Optional[List[str]]
-    where: Optional[Compare] = None
+    where: Compare | Intersection | None = None
     group_by: Optional[str] = None
-    order_by: Optional[str] = None
+    order_by: str | Distance | None = None
     aggregates: Optional[List[tuple]] = None
+    order_desc: bool = False
+    table_alias: Optional[str] = None
+    join: Optional["Join"] = None
+    projection: Optional[List[str]] = None
+    limit: Optional[int] = None
+
+
+def aggregate_name(function, column):
+    return "conteo" if function == "count" and column is None else function + "_" + str(column)
+
+
+@dataclass
+class Join:
+    table: str
+    left_column: str
+    right_column: str
+    alias: Optional[str] = None
 
 @dataclass
 class Insert(Node):
@@ -28,7 +75,7 @@ class Insert(Node):
 @dataclass
 class Delete(Node):
     table: str
-    where: Compare
+    where: Compare | Intersection
 
 @dataclass
 class BeginTransaction(Node):
@@ -69,4 +116,4 @@ class Analyze(Node):
 class Update(Node):
     table: str
     assignments: List[tuple]
-    where: Optional[Compare] = None 
+    where: Compare | Intersection | None = None
