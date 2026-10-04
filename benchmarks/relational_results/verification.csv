@@ -1,0 +1,10 @@
+test,status,seconds,evidence
+engine.parser.test_sql,ok,1.1033973539997532,"OK: parser, ejecución, restricciones persistentes, JOIN externo, EXPLAIN, concurrencia y API"
+engine.test_rtree,ok,41.97141149900199,"R-Tree: inserción, split, borrado, radio, kNN y polígonos verificados"
+engine.parser.test_spatial_sql,ok,1.2485609969990037,"OK: SQL espacial, R-Tree sin scan, radio/kNN/polígonos, mantenimiento, persistencia, mapa/API y LIMIT"
+Heap: borrado y reutilización del RID,ok,,
+"Secuencial: orden, borrado lazy y reorganización",ok,,
+"B+: split, duplicados, borrado y reapertura",ok,,
+"Hash: split, duplicados, borrado y reapertura",ok,,
+B+ agrupado: reorganización y persistencia de filas,ok,,
+"R-Tree: carga STR, disco, radio/k-NN, cambios y reapertura",ok,,
