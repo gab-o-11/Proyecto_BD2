@@ -7,10 +7,13 @@ const geographic = p => Array.isArray(p) && p.length === 2 && p.every(Number.isF
   && Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180
 const key = p => p.join(',')
 
-export default function MapPanel({ tables, result, dataVersion, location, onLocation }) {
+const COLORES_NIVEL = ['#14688f', '#2a9d8f', '#b08900', '#8e44ad', '#5c7280', '#c0392b']
+
+export default function MapPanel({ tables, result, dataVersion, location, onLocation, rectangulos }) {
   const container = useRef(null)
   const map = useRef(null)
   const layers = useRef(null)
+  const capaRectangulos = useRef(null)
   const center = useRef(null)
   const [selected, setSelected] = useState('')
   const [points, setPoints] = useState([])
@@ -35,6 +38,7 @@ export default function MapPanel({ tables, result, dataVersion, location, onLoca
       maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
     }).addTo(instance)
     map.current = instance
+    capaRectangulos.current = L.layerGroup().addTo(instance)
     layers.current = L.layerGroup().addTo(instance)
     const observer = new ResizeObserver(() => instance.invalidateSize())
     observer.observe(container.current)
@@ -55,6 +59,31 @@ export default function MapPanel({ tables, result, dataVersion, location, onLoca
         .bindTooltip('mi_ubicacion').addTo(map.current)
     }
   }, [location])
+
+  useEffect(() => {
+    if (!rectangulos) return
+    const valor = JSON.stringify([rectangulos.tabla, rectangulos.columna])
+    if (valor !== selected && options.some(o => o.value === valor)) setSelected(valor)
+  }, [rectangulos])
+
+  useEffect(() => {
+    capaRectangulos.current.clearLayers()
+    if (!rectangulos) return
+    const visitadas = new Set(rectangulos.visitadas)
+    for (const r of rectangulos.rectangulos) {
+      const [minLat, minLon, maxLat, maxLon] = r.mbr
+      if (![minLat, maxLat].every(v => Math.abs(v) <= 90) || ![minLon, maxLon].every(v => Math.abs(v) <= 180)) continue
+      const visitada = visitadas.has(r.pagina)
+      L.rectangle([[minLat, minLon], [maxLat, maxLon]], {
+        color: visitada ? '#d54a14' : COLORES_NIVEL[r.nivel % COLORES_NIVEL.length],
+        weight: visitada ? 2.5 : r.hoja ? 1 : 1.5,
+        dashArray: r.hoja ? '3 3' : null,
+        fillOpacity: visitada ? 0.05 : 0.02,
+      }).bindTooltip(`Nivel ${r.nivel} · p.${r.pagina}${r.hoja ? ' · hoja' : ''}${visitada ? ' · visitada' : ''}`).addTo(capaRectangulos.current)
+    }
+    const raiz = rectangulos.rectangulos.find(r => r.nivel === 0)
+    if (raiz) map.current.fitBounds([[raiz.mbr[0], raiz.mbr[1]], [raiz.mbr[2], raiz.mbr[3]]], { padding: [10, 10] })
+  }, [rectangulos])
 
   useEffect(() => {
     let active = true

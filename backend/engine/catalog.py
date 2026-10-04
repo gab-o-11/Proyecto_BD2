@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import struct
 
 from engine.storage.heap.heapfile import Heapfile
@@ -15,6 +16,7 @@ PAGE_SIZE = 4096
 BLOCK_FACTOR = 32
 TABLE_SUFFIX = ".tbl"
 STATS_SUFFIX = ".stats"
+MARCA_SIN_SEMILLA = ".sin_semilla"
 AUTOANALYZE_BASE = 50
 AUTOANALYZE_FACTOR = 0.1
 
@@ -262,6 +264,48 @@ class StorageTable(SpatialTable):
         self.analyze()
         return len(rows)
 
+    def _arbol_de(self, columna):
+        if columna in self.spatial_indexes:
+            return "RTREE", self.spatial_indexes[columna]
+        if columna == self.index_field and self.index_kind == "BPLUS_CLUSTERED":
+            return self.index_kind, self.index.tree
+        if columna == self.index_field and self.index_kind == "BPLUS":
+            return self.index_kind, self.index
+        raise ValueError(f"la columna '{columna}' de '{self.name}' no tiene un índice en árbol (B+ o R-Tree)")
+
+    def describir_indice(self, columna, pagina=None, profundidad=0):
+        tipo, arbol = self._arbol_de(columna)
+        return {
+            "tabla": self.name,
+            "columna": columna,
+            "tipo": tipo,
+            "altura": arbol.height,
+            "raiz": arbol.root_id,
+            "orden": arbol.max_entries if tipo == "RTREE" else arbol.order,
+            "nodo": arbol.describir_nodo(pagina, profundidad),
+        }
+
+    def rectangulos_rtree(self, columna, niveles, limite):
+        tipo, arbol = self._arbol_de(columna)
+        if tipo != "RTREE":
+            raise ValueError(f"la columna '{columna}' no tiene R-Tree")
+        return arbol.rectangulos(niveles, limite)
+
+    def archivos_de_indices(self):
+        salida = {}
+        for columna, arbol in self.spatial_indexes.items():
+            salida[arbol.nodes_path] = (columna, "RTREE")
+        if self.index_kind == "BPLUS_CLUSTERED":
+            salida[self.index.tree.nodes_path] = (self.index_field, self.index_kind)
+        elif self.index_kind == "BPLUS":
+            salida[self.index.nodes_path] = (self.index_field, self.index_kind)
+        return salida
+
+    def cerrar(self):
+        self.index.close()
+        for arbol in self.spatial_indexes.values():
+            arbol.close()
+
     def _ruta_rtree(self, column):
         return os.path.join(self.data_dir, self.name + "_" + column + "_rtree")
 
@@ -474,6 +518,8 @@ def create_catalog(data_dir):
     existentes = _load_tables(data_dir)
     if existentes:
         return existentes
+    if os.path.exists(os.path.join(data_dir, MARCA_SIN_SEMILLA)):
+        return {}
 
     clientes = StorageTable(
         "clientes",
@@ -524,3 +570,17 @@ def table_info(tabla):
         "rows": tabla.count(),
         "storage": storage,
     }
+
+
+def vaciar_catalogo(catalogo, data_dir):
+    for tabla in catalogo.values():
+        tabla.cerrar()
+    catalogo.clear()
+    for nombre in os.listdir(data_dir):
+        ruta = os.path.join(data_dir, nombre)
+        if os.path.isdir(ruta):
+            shutil.rmtree(ruta)
+        else:
+            os.remove(ruta)
+    with open(os.path.join(data_dir, MARCA_SIN_SEMILLA), "w") as f:
+        f.write("")

@@ -21,6 +21,7 @@ function normStatement(s) {
   if (s.message) out.message = s.message
   if (s.explain) out.explain = s.explain
   if (s.spatial) out.spatial = s.spatial
+  if (s.recorrido) out.recorrido = s.recorrido
   return out
 }
 
@@ -53,6 +54,7 @@ export async function runQuery(sql, parameters = {}) {
       statements: (data.statements || []).map(normStatement),
       elapsedMs: data.elapsedMs,
       explain: data.explain,
+      recorrido: data.recorrido,
     }
   } catch (e) {
     return { error: String(e), plan: [], statements: [] }
@@ -70,6 +72,37 @@ export async function importCsv(file, tableName, indexKind, indexField) {
     const data = await res.json()
     if (!res.ok) return { error: data.detail || data.error || `HTTP ${res.status}` }
     return data
+  } catch (error) {
+    return { error: String(error) }
+  }
+}
+
+async function leerJson(url) {
+  try {
+    const res = await fetch(url)
+    if (!res.ok) return { error: 'HTTP ' + res.status }
+    return await res.json()
+  } catch (error) {
+    return { error: String(error) }
+  }
+}
+
+export function describirIndice(tabla, columna, pagina, profundidad) {
+  const params = new URLSearchParams({ column: columna, depth: String(profundidad) })
+  if (pagina !== undefined && pagina !== null) params.set('page', String(pagina))
+  return leerJson(`/api/tables/${encodeURIComponent(tabla)}/index?${params}`)
+}
+
+export function rectangulosIndice(tabla, columna, niveles) {
+  const params = new URLSearchParams({ column: columna, levels: String(niveles) })
+  return leerJson(`/api/tables/${encodeURIComponent(tabla)}/index/rects?${params}`)
+}
+
+export async function reiniciarBase() {
+  try {
+    const res = await fetch('/api/reset', { method: 'POST' })
+    if (!res.ok) return { error: 'HTTP ' + res.status }
+    return await res.json()
   } catch (error) {
     return { error: String(error) }
   }

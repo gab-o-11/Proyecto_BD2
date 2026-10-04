@@ -29,13 +29,15 @@ function TableItem({ table }) {
   )
 }
 
-export default function FilesPanel({ tables, onImport, loading }) {
+export default function FilesPanel({ tables, onImport, onReset, loading }) {
   const inputRef = useRef(null)
   const [tableName, setTableName] = useState('')
   const [indexField, setIndexField] = useState('')
   const [indexKind, setIndexKind] = useState('HASH')
   const [importError, setImportError] = useState('')
   const [importMessage, setImportMessage] = useState('')
+  const [confirmando, setConfirmando] = useState(false)
+  const [resetMessage, setResetMessage] = useState('')
 
   async function submit(event) {
     event.preventDefault()
@@ -53,6 +55,12 @@ export default function FilesPanel({ tables, onImport, loading }) {
     const result = await onImport(file, tableName.trim(), indexKind, indexField.trim())
     if (result?.error) setImportError(result.error)
     else setImportMessage(result?.message || 'Importación completada.')
+  }
+
+  async function borrarTodo() {
+    setConfirmando(false)
+    const result = await onReset()
+    setResetMessage(result?.error || result?.message || '')
   }
 
   return (
@@ -73,6 +81,22 @@ export default function FilesPanel({ tables, onImport, loading }) {
           {importError && <div className="import-error">{importError}</div>}
           {importMessage && <div className="import-message">{importMessage}</div>}
         </form>
+        <div className="reset-box">
+          {!confirmando ? (
+            <button className="btn danger" onClick={() => { setResetMessage(''); setConfirmando(true) }} disabled={loading || tables.length === 0}>
+              Borrar base de datos
+            </button>
+          ) : (
+            <>
+              <div className="reset-warning">Se borrarán {tables.length} tablas con sus datos e índices. No se puede deshacer.</div>
+              <div className="reset-actions">
+                <button className="btn danger" onClick={borrarTodo} disabled={loading}>Borrar todo</button>
+                <button className="btn secondary" onClick={() => setConfirmando(false)} disabled={loading}>Cancelar</button>
+              </div>
+            </>
+          )}
+          {resetMessage && <div className="import-message">{resetMessage}</div>}
+        </div>
         {tables.length === 0 ? (
           <p className="muted">Sin tablas.</p>
         ) : (

@@ -66,6 +66,7 @@ class Executor(Visitor):
     def __init__(self, catalog=None, transaction_manager=None, data_dir=None, parameters=None):
         self.catalog = catalog if catalog is not None else {}
         self.plan = []
+        self.paginas_tocadas = set()
         self.transaction_manager = transaction_manager or TransactionManager()
         self.data_dir = data_dir
         self.parameters = parameters or {}
@@ -94,6 +95,7 @@ class Executor(Visitor):
         salidas = []
         for sentencia in sentencias:
             self.plan = []
+            self.paginas_tocadas = set()
             implicita = self.transaction_manager.current() is None and type(sentencia).__name__ not in ("BeginTransaction", "EndTransaction")
             if implicita:
                 self.transaction_manager.begin()
@@ -117,6 +119,8 @@ class Executor(Visitor):
                 salida["spatial"] = resultado["spatial"]
             if resultado is not None and "explain" in resultado:
                 salida["explain"] = resultado["explain"]
+            if self.paginas_tocadas:
+                salida["paginas"] = sorted(self.paginas_tocadas)
             salidas.append(salida)
         return salidas
 
@@ -328,6 +332,7 @@ class Executor(Visitor):
     def _ejecutar(self, raiz):
         filas = list(raiz.iterar())
         self.plan.extend(raiz.traza())
+        self.paginas_tocadas = set(raiz.real.io.paginas)
         return filas
 
     def _mantener(self, tabla):
@@ -358,6 +363,7 @@ class Executor(Visitor):
             for _ in raiz.iterar():
                 pass
             ejecucion = time.perf_counter() - inicio
+            self.paginas_tocadas = set(raiz.real.io.paginas)
             self.plan.extend(raiz.traza())
             if hasattr(raiz, "afectadas"):
                 self._mantener(raiz.tabla)
