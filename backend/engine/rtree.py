@@ -2,8 +2,11 @@
 
 import heapq
 import math
+import os
+import struct
 from dataclasses import dataclass, field
 
+from engine.hashing.page import FileManager
 from engine.spatial import EARTH_RADIUS_METERS, distance, point
 
 
@@ -108,59 +111,357 @@ class _Node:
             self.bounds = child.bounds if self.bounds is None else _union(self.bounds, child.bounds)
 
 
+HEADER_FORMAT = "<ii"
+HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
+ENTRY_FORMAT = "<ddqbqq"
+ENTRY_SIZE = struct.calcsize(ENTRY_FORMAT)
+REF_FORMAT = "<ddddii"
+REF_SIZE = struct.calcsize(REF_FORMAT)
+META_FORMAT = "<iiqqqi"
+META_SIZE = struct.calcsize(META_FORMAT)
+
+PAYLOAD_INT = 1
+PAYLOAD_PAR = 2
+
+
+@dataclass
+class _Ref:
+    bounds: tuple
+    pid: int
+    count: int
+
+
+def _codificar(payload):
+    if isinstance(payload, bool):
+        raise ValueError("el payload del R-Tree en disco debe ser un entero o un par de enteros")
+    if isinstance(payload, int):
+        return PAYLOAD_INT, payload, 0
+    if isinstance(payload, (tuple, list)) and len(payload) == 2 and all(isinstance(v, int) and not isinstance(v, bool) for v in payload):
+        return PAYLOAD_PAR, payload[0], payload[1]
+    raise ValueError("el payload del R-Tree en disco debe ser un entero o un par de enteros")
+
+
+def _decodificar(tipo, a, b):
+    if tipo == PAYLOAD_INT:
+        return a
+    return (a, b)
+
+
+def _centro(item):
+    bounds = item.bounds
+    return ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2)
+
+
 class RTree:
-    def __init__(self, max_entries=16):
+    def __init__(self, path, max_entries=16):
         if isinstance(max_entries, bool) or not isinstance(max_entries, int) or max_entries < 2:
             raise ValueError("max_entries debe ser un entero mayor o igual a 2")
-        self.max_entries = max_entries
-        self.min_entries = max(1, max_entries // 2)
-        self.root = _Node()
+        self.path = path
+        self.meta_path = path + ".meta"
+        self.nodes_path = path + ".nodes"
+        self.nuevo = not os.path.exists(self.meta_path)
+        if self.nuevo:
+            self.max_entries = max_entries
+            self._reiniciar_contadores()
+        else:
+            self._cargar_meta()
+        self.min_entries = max(1, self.max_entries // 2)
+        self.page_size = HEADER_SIZE + self.max_entries * max(ENTRY_SIZE, REF_SIZE)
+        if self.nuevo and os.path.exists(self.nodes_path):
+            os.remove(self.nodes_path)
+        self.paginas = FileManager(self.nodes_path, self.page_size)
+        if self.nuevo:
+            self.root_id = self._nueva(_Node(True, []))
+            self._guardar_meta()
+
+    def _reiniciar_contadores(self):
+        self.root_id = 0
+        self._height = 1
         self._size = 0
         self._ordinal = 0
         self._invalid_geo = 0
 
-    def __len__(self):
-        return self._size
+    def _cargar_meta(self):
+        with open(self.meta_path, "rb") as f:
+            datos = struct.unpack(META_FORMAT, f.read(META_SIZE))
+        self.root_id, self._height, self._size, self._ordinal, self._invalid_geo, self.max_entries = datos
+
+    def _guardar_meta(self):
+        with open(self.meta_path, "wb") as f:
+            f.write(struct.pack(META_FORMAT, self.root_id, self._height, self._size,
+                                self._ordinal, self._invalid_geo, self.max_entries))
 
     @property
     def height(self):
-        node, height = self.root, 1
-        while not node.leaf:
-            node = node.children[0]
-            height += 1
-        return height
+        return self._height
+
+    def _empaquetar(self, nodo):
+        salida = struct.pack(HEADER_FORMAT, 1 if nodo.leaf else 0, len(nodo.children))
+        for hijo in nodo.children:
+            if nodo.leaf:
+                tipo, a, b = _codificar(hijo.payload)
+                salida += struct.pack(ENTRY_FORMAT, hijo.coordinates[0], hijo.coordinates[1], hijo.ordinal, tipo, a, b)
+            else:
+                salida += struct.pack(REF_FORMAT, *hijo.bounds, hijo.pid, hijo.count)
+        return salida.ljust(self.page_size, b"\x00")
+
+    def _desempaquetar(self, crudo):
+        hoja, cantidad = struct.unpack_from(HEADER_FORMAT, crudo, 0)
+        hijos = []
+        posicion = HEADER_SIZE
+        for _ in range(cantidad):
+            if hoja:
+                lat, lon, ordinal, tipo, a, b = struct.unpack_from(ENTRY_FORMAT, crudo, posicion)
+                hijos.append(_Entry((lat, lon), _decodificar(tipo, a, b), ordinal))
+                posicion += ENTRY_SIZE
+            else:
+                b0, b1, b2, b3, pid, conteo = struct.unpack_from(REF_FORMAT, crudo, posicion)
+                hijos.append(_Ref((b0, b1, b2, b3), pid, conteo))
+                posicion += REF_SIZE
+        nodo = _Node(bool(hoja), hijos)
+        nodo.refresh()
+        return nodo
+
+    def _leer(self, pid):
+        return self._desempaquetar(self.paginas.read_raw(pid))
+
+    def _escribir(self, pid, nodo):
+        self.paginas.write_raw(pid, self._empaquetar(nodo))
+
+    def _nueva(self, nodo):
+        return self.paginas.append_raw(self._empaquetar(nodo))
+
+    def insert(self, coordinates, payload):
+        coordinates = point(coordinates)
+        _codificar(payload)
+        entrada = _Entry(coordinates, payload, self._ordinal)
+        self._insert_entry(entrada)
+        self._ordinal += 1
+        self._size += 1
+        self._invalid_geo += not self._geographic(coordinates)
+        self._guardar_meta()
+
+    def _insert_entry(self, entry):
+        propia, hermano = self._insertar(self.root_id, entry)
+        if hermano is not None:
+            raiz = _Node(False, [propia, hermano])
+            raiz.refresh()
+            self.root_id = self._nueva(raiz)
+            self._height += 1
+
+    def _insertar(self, pid, entry):
+        nodo = self._leer(pid)
+        if nodo.leaf:
+            nodo.children.append(entry)
+        else:
+            hijos = nodo.children
+            i = min(range(len(hijos)), key=lambda j: (
+                self._ampliacion(hijos[j], entry), self._area_de(hijos[j]), hijos[j].count))
+            propia, hermano = self._insertar(hijos[i].pid, entry)
+            hijos[i] = propia
+            if hermano is not None:
+                hijos.append(hermano)
+        nodo.refresh()
+        if len(nodo.children) > self.max_entries:
+            otro = self._split(nodo)
+            otro_id = self._nueva(otro)
+            self._escribir(pid, nodo)
+            return _Ref(nodo.bounds, pid, len(nodo.children)), _Ref(otro.bounds, otro_id, len(otro.children))
+        self._escribir(pid, nodo)
+        return _Ref(nodo.bounds, pid, len(nodo.children)), None
+
+    @staticmethod
+    def _area_de(item):
+        b = item.bounds
+        return (b[2] - b[0]) * (b[3] - b[1])
+
+    @staticmethod
+    def _ampliacion(item, entry):
+        b, e = item.bounds, entry.bounds
+        union = (min(b[0], e[0]), min(b[1], e[1]), max(b[2], e[2]), max(b[3], e[3]))
+        return (union[2] - union[0]) * (union[3] - union[1]) - (b[2] - b[0]) * (b[3] - b[1])
+
+    def _entradas(self, pid):
+        nodo = self._leer(pid)
+        if nodo.leaf:
+            yield from nodo.children
+        else:
+            for ref in nodo.children:
+                yield from self._entradas(ref.pid)
+
+    def _entradas_de(self, nodo):
+        if nodo.leaf:
+            yield from nodo.children
+        else:
+            for ref in nodo.children:
+                yield from self._entradas(ref.pid)
+
+    def delete(self, coordinates, payload):
+        coordinates = point(coordinates)
+        huerfanos = []
+        encontrado, _ = self._quitar(self.root_id, coordinates, payload, huerfanos)
+        if not encontrado:
+            return False
+        raiz = self._leer(self.root_id)
+        while not raiz.leaf and len(raiz.children) == 1:
+            self.root_id = raiz.children[0].pid
+            self._height -= 1
+            raiz = self._leer(self.root_id)
+        if not raiz.children and not raiz.leaf:
+            self.root_id = self._nueva(_Node(True, []))
+            self._height = 1
+        for entrada in huerfanos:
+            self._insert_entry(entrada)
+        self._size -= 1
+        self._invalid_geo -= not self._geographic(coordinates)
+        self._guardar_meta()
+        return True
+
+    def _quitar(self, pid, coordinates, payload, huerfanos):
+        nodo = self._leer(pid)
+        if nodo.leaf:
+            for i, entrada in enumerate(nodo.children):
+                if entrada.coordinates == coordinates and entrada.payload == payload:
+                    del nodo.children[i]
+                    nodo.refresh()
+                    self._escribir(pid, nodo)
+                    return True, nodo
+            return False, None
+        for i, ref in enumerate(nodo.children):
+            if not _intersects(ref.bounds, coordinates + coordinates):
+                continue
+            encontrado, hijo = self._quitar(ref.pid, coordinates, payload, huerfanos)
+            if not encontrado:
+                continue
+            if len(hijo.children) < self.min_entries:
+                del nodo.children[i]
+                huerfanos.extend(self._entradas_de(hijo))
+            else:
+                nodo.children[i] = _Ref(hijo.bounds, ref.pid, len(hijo.children))
+            nodo.refresh()
+            self._escribir(pid, nodo)
+            return True, nodo
+        return False, None
+
+    def _search(self, bounds):
+        pendientes = [self.root_id]
+        while pendientes:
+            nodo = self._leer(pendientes.pop())
+            if nodo.bounds is None or not _intersects(nodo.bounds, bounds):
+                continue
+            for hijo in nodo.children:
+                if _intersects(hijo.bounds, bounds):
+                    if nodo.leaf:
+                        yield hijo
+                    else:
+                        pendientes.append(hijo.pid)
+
+    def knn(self, center, k, metric="haversine"):
+        center = self._query(center, metric)
+        if isinstance(k, bool) or not isinstance(k, int) or k < 0:
+            raise ValueError("k debe ser un entero no negativo")
+        raiz = self._leer(self.root_id)
+        if k == 0 or raiz.bounds is None:
+            return []
+        pendientes = [(self._lower_bound(center, raiz.bounds, metric), 0, self.root_id)]
+        serial, mejores = 0, []
+        while pendientes:
+            cota, _, pid = heapq.heappop(pendientes)
+            if len(mejores) == k and cota > -mejores[0][0]:
+                break
+            nodo = self._leer(pid)
+            for hijo in nodo.children:
+                if nodo.leaf:
+                    actual = distance(center, hijo.coordinates, metric)
+                    candidato = (-actual, -hijo.ordinal, hijo)
+                    if len(mejores) < k:
+                        heapq.heappush(mejores, candidato)
+                    elif (actual, hijo.ordinal) < (-mejores[0][0], -mejores[0][1]):
+                        heapq.heapreplace(mejores, candidato)
+                else:
+                    cota_hijo = self._lower_bound(center, hijo.bounds, metric)
+                    if len(mejores) < k or cota_hijo <= -mejores[0][0]:
+                        serial += 1
+                        heapq.heappush(pendientes, (cota_hijo, serial, hijo.pid))
+        return [entrada.payload for _, _, entrada in sorted(mejores, key=lambda item: (-item[0], -item[1]))]
+
+    def knn_iter(self, center, metric="haversine"):
+        center = self._query(center, metric)
+        raiz = self._leer(self.root_id)
+        if raiz.bounds is None:
+            return
+        pendientes = [(self._lower_bound(center, raiz.bounds, metric), 0, 0, self.root_id)]
+        serial = 0
+        while pendientes:
+            _, tipo, _, item = heapq.heappop(pendientes)
+            if tipo == 1:
+                yield item.payload
+                continue
+            nodo = self._leer(item)
+            for hijo in nodo.children:
+                if nodo.leaf:
+                    heapq.heappush(pendientes, (distance(center, hijo.coordinates, metric), 1, hijo.ordinal, hijo))
+                else:
+                    serial += 1
+                    heapq.heappush(pendientes, (self._lower_bound(center, hijo.bounds, metric), 0, serial, hijo.pid))
+
+    def recrear(self):
+        self.paginas.close()
+        for ruta in (self.meta_path, self.nodes_path):
+            if os.path.exists(ruta):
+                os.remove(ruta)
+        self._reiniciar_contadores()
+        self.paginas = FileManager(self.nodes_path, self.page_size)
+        self.nuevo = True
+
+    def bulk_load(self, items):
+        self.recrear()
+        nivel = []
+        for coordinates, payload in items:
+            coordinates = point(coordinates)
+            _codificar(payload)
+            nivel.append(_Entry(coordinates, payload, self._ordinal))
+            self._ordinal += 1
+            self._invalid_geo += not self._geographic(coordinates)
+        self._size = len(nivel)
+        if not nivel:
+            self.root_id = self._nueva(_Node(True, []))
+            self._guardar_meta()
+            return
+        hoja = True
+        while True:
+            refs = []
+            for grupo in self._str(nivel):
+                nodo = _Node(hoja, grupo)
+                nodo.refresh()
+                refs.append(_Ref(nodo.bounds, self._nueva(nodo), len(grupo)))
+            if len(refs) == 1:
+                self.root_id = refs[0].pid
+                break
+            nivel = refs
+            hoja = False
+            self._height += 1
+        self._guardar_meta()
+
+    def _str(self, items):
+        capacidad = self.max_entries
+        hojas = math.ceil(len(items) / capacidad)
+        franjas = math.ceil(math.sqrt(hojas))
+        por_franja = franjas * capacidad
+        ordenados = sorted(items, key=lambda item: _centro(item)[0])
+        grupos = []
+        for inicio in range(0, len(ordenados), por_franja):
+            franja = sorted(ordenados[inicio:inicio + por_franja], key=lambda item: _centro(item)[1])
+            for desde in range(0, len(franja), capacidad):
+                grupos.append(franja[desde:desde + capacidad])
+        return grupos
+
+    def __len__(self):
+        return self._size
 
     @staticmethod
     def _geographic(coordinates):
         return -90 <= coordinates[0] <= 90 and -180 <= coordinates[1] <= 180
-
-    def insert(self, coordinates, payload):
-        coordinates = point(coordinates)
-        hash(payload)
-        entry = _Entry(coordinates, payload, self._ordinal)
-        self._insert_entry(entry)
-        self._ordinal += 1
-        self._size += 1
-        self._invalid_geo += not self._geographic(coordinates)
-
-    def _insert_entry(self, entry):
-        sibling = self._insert(self.root, entry)
-        if sibling is not None:
-            self.root = _Node(False, [self.root, sibling])
-            self.root.refresh()
-
-    def _insert(self, node, entry):
-        if node.leaf:
-            node.children.append(entry)
-        else:
-            child = min(node.children, key=lambda c: (
-                _area(_union(c.bounds, entry.bounds)) - _area(c.bounds),
-                _area(c.bounds), len(c.children)))
-            sibling = self._insert(child, entry)
-            if sibling is not None:
-                node.children.append(sibling)
-        node.refresh()
-        return self._split(node) if len(node.children) > self.max_entries else None
 
     def _split(self, node):
         children = node.children
@@ -192,58 +493,6 @@ class RTree:
         node.refresh()
         sibling.refresh()
         return sibling
-
-    @staticmethod
-    def _entries(node):
-        if node.leaf:
-            yield from node.children
-        else:
-            for child in node.children:
-                yield from RTree._entries(child)
-
-    def delete(self, coordinates, payload):
-        coordinates = point(coordinates)
-        orphaned = []
-        def remove(node):
-            if node.leaf:
-                for i, entry in enumerate(node.children):
-                    if entry.coordinates == coordinates and entry.payload == payload:
-                        del node.children[i]
-                        node.refresh()
-                        return True
-            else:
-                for child in list(node.children):
-                    if _intersects(child.bounds, coordinates + coordinates) and remove(child):
-                        if len(child.children) < self.min_entries:
-                            node.children.remove(child)
-                            orphaned.extend(self._entries(child))
-                        node.refresh()
-                        return True
-            return False
-        if not remove(self.root):
-            return False
-        while not self.root.leaf and len(self.root.children) == 1:
-            self.root = self.root.children[0]
-        if not self.root.children:
-            self.root = _Node()
-        for entry in orphaned:
-            self._insert_entry(entry)
-        self._size -= 1
-        self._invalid_geo -= not self._geographic(coordinates)
-        return True
-
-    def _search(self, bounds):
-        pending = [self.root]
-        while pending:
-            node = pending.pop()
-            if node.bounds is None or not _intersects(node.bounds, bounds):
-                continue
-            for child in node.children:
-                if _intersects(child.bounds, bounds):
-                    if node.leaf:
-                        yield child
-                    else:
-                        pending.append(child)
 
     def search(self, bounds):
         return [entry.payload for entry in sorted(self._search(_bounds(bounds)), key=lambda e: e.ordinal)]
@@ -317,54 +566,15 @@ class RTree:
         # Margen de redondeo conserva la cota inferior cerca de distancia cero.
         return EARTH_RADIUS_METERS * math.acos(min(1, max(-1, dot + 1e-14)))
 
-    def knn(self, center, k, metric="haversine"):
-        center = self._query(center, metric)
-        if isinstance(k, bool) or not isinstance(k, int) or k < 0:
-            raise ValueError("k debe ser un entero no negativo")
-        if k == 0 or self.root.bounds is None:
-            return []
-        pending = [(self._lower_bound(center, self.root.bounds, metric), 0, self.root)]
-        serial, best = 0, []
-        while pending:
-            lower, _, node = heapq.heappop(pending)
-            if len(best) == k and lower > -best[0][0]:
-                break
-            for child in node.children:
-                if node.leaf:
-                    actual = distance(center, child.coordinates, metric)
-                    candidate = (-actual, -child.ordinal, child)
-                    if len(best) < k:
-                        heapq.heappush(best, candidate)
-                    elif (actual, child.ordinal) < (-best[0][0], -best[0][1]):
-                        heapq.heapreplace(best, candidate)
-                else:
-                    bound = self._lower_bound(center, child.bounds, metric)
-                    if len(best) < k or bound <= -best[0][0]:
-                        serial += 1
-                        heapq.heappush(pending, (bound, serial, child))
-        return [entry.payload for _, _, entry in sorted(best, key=lambda item: (-item[0], -item[1]))]
-
-    def knn_iter(self, center, metric="haversine"):
-        center = self._query(center, metric)
-        if self.root.bounds is None:
-            return
-        pending = [(self._lower_bound(center, self.root.bounds, metric), 0, 0, self.root)]
-        serial = 0
-        while pending:
-            _, tipo, _, item = heapq.heappop(pending)
-            if tipo == 1:
-                yield item.payload
-                continue
-            for child in item.children:
-                if item.leaf:
-                    heapq.heappush(pending, (distance(center, child.coordinates, metric), 1, child.ordinal, child))
-                else:
-                    serial += 1
-                    heapq.heappush(pending, (self._lower_bound(center, child.bounds, metric), 0, serial, child))
-
     def search_polygon(self, vertices):
         vertices = validate_polygon(vertices)
         xs, ys = zip(*vertices)
         entries = self._search((min(xs), min(ys), max(xs), max(ys)))
         return [entry.payload for entry in sorted(entries, key=lambda e: e.ordinal)
                 if contains_point(vertices, entry.coordinates)]
+
+    def bytes_en_disco(self):
+        return os.path.getsize(self.nodes_path) + os.path.getsize(self.meta_path)
+
+    def close(self):
+        self.paginas.close()
