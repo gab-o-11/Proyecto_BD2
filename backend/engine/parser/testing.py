@@ -71,6 +71,32 @@ IDA_Y_VUELTA = [
     "DELETE FROM t WHERE fecha BETWEEN '2026-01-01' AND '2026-12-31'",
 ]
 
+MENSAJES = [
+    ("DELETE FROM t", "se encontró fin de la consulta"),
+    ("SELECT * FROM t WHERE x", "operador de comparación o BETWEEN"),
+    ("INSERT INTO t VALUES (1,", "número, cadena o POINT"),
+    ("SELECT * FROM t WHERE distancia(u, POINT(abc, 1)) < 5", "se encontró 'abc'"),
+    ("SELECT * FROM t ORDER BY intersecta(u, POLYGON(POINT(0, 0), POINT(1, 0), POINT(0, 1)))", "Línea 1: INTERSECTA"),
+    ("SELECT * FROM t\nWHERE id BETWEEN 1", "Línea 2"),
+]
+
+def probar_mensajes():
+    print("=" * 60)
+    print("MENSAJES DE ERROR")
+    print("=" * 60)
+    correctas = 0
+    for consulta, fragmento in MENSAJES:
+        try:
+            Parser(Scanner(consulta)).parse_program()
+            print(f"  FALLA {consulta!r}\n     NO dio error")
+            continue
+        except (ParseError, LexicalError) as e:
+            mensaje = str(e)
+        if fragmento in mensaje:
+            correctas += 1
+        else:
+            print(f"  FALLA {consulta!r}\n     esperaba: {fragmento!r}\n     obtuvo:   {mensaje!r}")
+    print(f"\n{correctas} de {len(MENSAJES)} mensajes correctos\n")
 
 def probar_ida_y_vuelta():
     print("=" * 60)
@@ -100,7 +126,7 @@ def probar_ida_y_vuelta():
 
 def main():
     probar_ida_y_vuelta()
-
+    probar_mensajes()
     try:
         ast = Parser(Scanner(CONSULTAS)).parse_program()
     except (ParseError, LexicalError) as e:
