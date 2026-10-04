@@ -118,7 +118,11 @@ class StorageTable(SpatialTable):
         for col, col_type in self.schema:
             datos = valores[col]
             info = {"n_distinct": len(set(datos)), "min": None, "max": None}
-            if datos:
+            if datos and col_type == "point":
+                latitudes = [dato[0] for dato in datos]
+                longitudes = [dato[1] for dato in datos]
+                info["bbox"] = [min(latitudes), min(longitudes), max(latitudes), max(longitudes)]
+            elif datos:
                 info["min"] = min(datos)
                 info["max"] = max(datos)
             columnas[col] = info

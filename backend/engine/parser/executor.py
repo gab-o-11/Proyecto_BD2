@@ -7,8 +7,9 @@ from .nodes import Compare, Distance, Point, Intersection, aggregate_name, expre
 from ..catalog import StorageTable
 from ..transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from ..plan import base_de, planner, reporte
+from ..plan import costos
 from ..plan.costos import Perfil
-from ..plan.nodos import Calificar, SpatialIndexScan
+from ..plan.nodos import Calificar
 from ..spatial import distance, point
 from ..spatial_table import SpatialTable
 from ..rtree import contains_point, validate_polygon
@@ -387,26 +388,55 @@ class Executor(Visitor):
 
     def _acceso(self, tabla, where):
         if self._es_espacial(where):
-            fallback = self._filtro_espacial(planner.acceso(tabla, None), tabla, where)
+            seleccion = self._selectividad_espacial(tabla, where)
+            fallback = self._filtro_espacial(planner.acceso(tabla, None), tabla, where, seleccion)
+            filas = Perfil(tabla).filas * (costos.DEFAULT_SPATIAL_SEL if seleccion is None else seleccion)
             if isinstance(where, Intersection):
                 column = where.column.removeprefix(tabla.name + ".")
                 vertices = self._vertices(where)
-                return self._indice_espacial(tabla, column, "polygon", lambda tree: tree.search_polygon(vertices), PrintVisitor().visit_Intersection(where))
+                extra = costos.CPU_OPERATOR_COST * len(vertices)
+                return self._indice_espacial(tabla, column, "polygon", lambda tree: tree.search_polygon(vertices), PrintVisitor().visit_Intersection(where), filas, extra)
             target = self._objetivo_espacial(tabla, where.column)
             if target is not None and where.op in ("<", "<=", "="):
                 column, center, metric = target
                 radius = float(where.value)
                 if radius >= 0:
-                    root = self._indice_espacial(tabla, column, "radius", lambda tree: tree.search_radius(center, radius, metric, inclusive=where.op != "<"), PrintVisitor().visit_Compare(where))
-                    return self._filtro_espacial(root, tabla, where) if where.op == "=" else root
+                    root = self._indice_espacial(tabla, column, "radius", lambda tree: tree.search_radius(center, radius, metric, inclusive=where.op != "<"), PrintVisitor().visit_Compare(where), filas)
+                    return self._filtro_espacial(root, tabla, where, costos.DEFAULT_EQ_SEL) if where.op == "=" else root
             return fallback
-        if where is not None:
-            columna = where.column
-            if columna.startswith(tabla.name + "."):
-                columna = columna.split(".", 1)[1]
-            columna = self._columna(tabla, columna)
-            where = Compare(columna, where.op, self._convertir(tabla, columna, where.value))
-        return planner.acceso(tabla, where)
+        return planner.acceso(tabla, self._condicion_simple(tabla, where))
+
+    def _condicion_simple(self, tabla, where):
+        if where is None:
+            return None
+        columna = where.column
+        if columna.startswith(tabla.name + "."):
+            columna = columna.split(".", 1)[1]
+        columna = self._columna(tabla, columna)
+        return Compare(columna, where.op, self._convertir(tabla, columna, where.value))
+
+    def _selectividad_espacial(self, tabla, where):
+        perfil = Perfil(tabla)
+        if isinstance(where, Intersection):
+            column = where.column.removeprefix(tabla.name + ".")
+            if column not in tabla.columns:
+                return None
+            return costos.selectividad_poligono(perfil, column, self._vertices(where))
+        target = self._objetivo_espacial(tabla, where.column)
+        if target is None:
+            return None
+        column, center, metric = target
+        if isinstance(where.value, bool) or not isinstance(where.value, (int, float)) or not math.isfinite(where.value):
+            return None
+        radio = float(where.value)
+        dentro = costos.selectividad_radio(perfil, column, center, max(radio, 0.0), metric)
+        if where.op in ("<", "<="):
+            return dentro
+        if where.op in (">", ">="):
+            return 1.0 - dentro
+        if where.op in ("!=", "<>"):
+            return 1.0 - costos.DEFAULT_EQ_SEL
+        return costos.DEFAULT_EQ_SEL
 
     def _distancia(self, tabla, expresion, disponibles=None):
         def operando(value):
@@ -463,13 +493,13 @@ class Executor(Visitor):
         center = (other.latitude, other.longitude) if isinstance(other, Point) else self.parameters[other]
         return columns[0], point(center), expresion.metric
 
-    def _indice_espacial(self, tabla, columna, operacion, buscar, texto, limite=None):
+    def _indice_espacial(self, tabla, columna, operacion, buscar, texto, filas, extra_cpu=0.0):
         def consulta():
             try:
-                return buscar(tabla.spatial_index(columna))
+                yield from buscar(tabla.spatial_index(columna))
             except ValueError as error:
                 raise SemanticError(str(error)) from error
-        return SpatialIndexScan(tabla, columna, operacion, consulta, texto, limite)
+        return planner.indice_espacial(tabla, columna, operacion, consulta, texto, filas, extra_cpu)
 
     @staticmethod
     def _vertices(condicion):
@@ -478,14 +508,14 @@ class Executor(Visitor):
         except ValueError as error:
             raise SemanticError(str(error)) from error
 
-    def _filtro_espacial(self, raiz, tabla, condicion):
+    def _filtro_espacial(self, raiz, tabla, condicion, selectividad=None):
         if isinstance(condicion, Intersection):
             column = condicion.column.removeprefix(tabla.name + ".") if condicion.column not in tabla.columns else condicion.column
             column = self._columna(tabla, column)
             if self._tipo_columna(tabla, column) != "point":
                 raise SemanticError("INTERSECTA requiere una columna POINT")
             vertices = self._vertices(condicion)
-            filtro = planner.filtrar(raiz, Compare(column, "=", True), lambda row: contains_point(vertices, row[column]), PrintVisitor().visit_Intersection(condicion))
+            filtro = planner.filtrar(raiz, Compare(column, "=", True), lambda row: contains_point(vertices, row[column]), PrintVisitor().visit_Intersection(condicion), selectividad)
             filtro.method = "sequential-polygon"
             return filtro
         try:
@@ -497,7 +527,7 @@ class Executor(Visitor):
         key_fn = self._distancia(tabla, condicion.column)
         texto = PrintVisitor().visit_Compare(condicion)
         # Comparaciones entre columnas, JOIN y complementos conservan el filtro secuencial.
-        return planner.filtrar(raiz, condicion, key_fn, texto)
+        return planner.filtrar(raiz, condicion, key_fn, texto, selectividad)
 
     @staticmethod
     def _tipo_columna(tabla, columna):

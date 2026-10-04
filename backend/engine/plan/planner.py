@@ -1,6 +1,6 @@
 from . import costos
 from .costos import Perfil, ajustar_filas
-from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Resultado, SeqScan, Sort
+from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Resultado, SeqScan, Sort, SpatialIndexScan
 
 DESIGUALDADES = (">", ">=", "<", "<=")
 
@@ -67,9 +67,11 @@ def unir(izquierda, derecha, clave_izquierda, clave_derecha, memoria):
     return HashJoin(izquierda, derecha, clave_izquierda, clave_derecha, memoria).estimar(inicio, total, filas, izquierda.ancho + derecha.ancho)
 
 
-def filtrar(hijo, condicion, key_fn=None, detail=None):
+def filtrar(hijo, condicion, key_fn=None, detail=None, selectividad=None):
+    if selectividad is None:
+        selectividad = costos.DEFAULT_EQ_SEL
     total = hijo.costo_total + hijo.filas_est * costos.CPU_OPERATOR_COST
-    filas = ajustar_filas(hijo.filas_est * costos.DEFAULT_EQ_SEL)
+    filas = ajustar_filas(hijo.filas_est * selectividad)
     return Filtro(hijo, condicion, key_fn, detail).estimar(hijo.costo_inicio, total, filas, hijo.ancho)
 
 
@@ -81,3 +83,11 @@ def modificar(accion, tabla, hijo, aplicar, metodo, detalle):
 
 def resultado(fila, ancho):
     return Resultado(fila).estimar(0.0, costos.CPU_TUPLE_COST, 1, ancho)
+
+
+def indice_espacial(tabla, columna, operacion, consulta, detalle, filas, extra_cpu=0.0):
+    perfil = Perfil(tabla)
+    arbol = tabla.spatial_index(columna)
+    filas = ajustar_filas(min(filas, max(perfil.filas, 1)))
+    inicio, total = costos.costo_spatial_scan(perfil, arbol.height, arbol.max_entries, filas, extra_cpu)
+    return SpatialIndexScan(tabla, columna, operacion, consulta, detalle).estimar(inicio, total, filas, perfil.ancho)

@@ -131,18 +131,13 @@ def base_de(tabla):
 class SpatialIndexScan(Nodo):
     tipo = "Spatial Index Scan"
 
-    def __init__(self, tabla, column, operation, query, detail, limit=None):
+    def __init__(self, tabla, column, operation, query, detail):
         super().__init__()
         self.tabla = tabla
         self.column = column
         self.operation = operation
         self.query = query
         self.detail = detail
-        from .costos import Perfil
-        perfil = Perfil(tabla)
-        rows = min(perfil.filas, limit) if limit is not None else max(1, perfil.filas // 3)
-        # ponytail: estimación heurística; histograma espacial si se requiere costeo fino.
-        self.estimar(0, math.log2(perfil.filas + 1) + rows * 0.01, rows, perfil.ancho)
 
     def titulo(self):
         return "Spatial Index Scan using " + self.indice() + " on " + self.tabla.name
