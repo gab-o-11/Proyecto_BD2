@@ -107,7 +107,10 @@ class BPlusTree:
         page_id = self.root_id
         node = self._read(page_id)
         while not node.is_leaf:
-            page_id = node.children[self._child_index(node, key)]
+            i = 0
+            while i < len(node.keys) and key > node.keys[i]:
+                i += 1
+            page_id = node.children[i]
             node = self._read(page_id)
         return page_id, node
 
