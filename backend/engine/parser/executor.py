@@ -3,7 +3,7 @@ import math
 import struct
 import time
 from .visitor import PrintVisitor, Visitor
-from .nodes import Compare, Distance, Point, Intersection, aggregate_name, expression_columns
+from .nodes import Compare, Distance, Point, Intersection, aggregate_name, expression_columns, Between
 from ..catalog import StorageTable
 from ..transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from ..plan import base_de, planner, reporte
@@ -238,6 +238,8 @@ class Executor(Visitor):
         return raiz, columnas, tabla
 
     def _fuente_select(self, node):
+        if isinstance(node.where, Between):
+            raise SemanticError("BETWEEN aún no está soportado por el planificador")
         izquierda = self._tabla(node.table)
         derecha = None if node.join is None else self._tabla(node.join.table)
         for tabla in sorted([izquierda] + ([] if derecha is None else [derecha]), key=lambda t: t.name):
@@ -390,6 +392,8 @@ class Executor(Visitor):
         return specs, nombres
 
     def _acceso(self, tabla, where):
+        if isinstance(where, Between):
+            raise SemanticError("BETWEEN aún no está soportado por el planificador")
         if self._es_espacial(where):
             seleccion = self._selectividad_espacial(tabla, where)
             fallback = self._filtro_espacial(planner.acceso(tabla, None), tabla, where, seleccion)

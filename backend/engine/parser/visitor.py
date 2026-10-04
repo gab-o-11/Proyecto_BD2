@@ -76,6 +76,10 @@ class PrintVisitor(Visitor):
         columna = node.column.accept(self) if isinstance(node.column, Distance) else node.column
         return f"{columna} {node.op} {self._literal(node.value)}"
 
+    def visit_Between(self, node):
+        columna = node.column.accept(self) if isinstance(node.column, Distance) else node.column
+        return f"{columna} BETWEEN {self._literal(node.low)} AND {self._literal(node.high)}"
+
     def visit_Point(self, node):
         return f"POINT({node.latitude}, {node.longitude})"
 
