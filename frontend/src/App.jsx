@@ -8,6 +8,8 @@ import MapPanel from './components/MapPanel'
 import IndexPanel from './components/IndexPanel'
 import ExplainTree from './components/ExplainTree'
 
+const CONSULTA_ESPACIAL = /\b(distancia|intersecta)\s*\(/i
+
 export default function App() {
   const [tables, setTables] = useState([])
   const [result, setResult] = useState(null)
@@ -16,6 +18,7 @@ export default function App() {
   const [location, setLocation] = useState([-12.0464, -77.0428])
   const [vista, setVista] = useState('resultados')
   const [rectangulos, setRectangulos] = useState(null)
+  const [ultimaConsulta, setUltimaConsulta] = useState('')
 
   useEffect(() => {
     listTables().then(setTables)
@@ -25,6 +28,7 @@ export default function App() {
     setLoading(true)
     const res = await runQuery(sql, { mi_ubicacion: location })
     setResult(res)
+    setUltimaConsulta(sql)
     if (res.explain && !res.error) setVista('plan')
     else if (vista === 'plan') setVista('resultados')
     if (res.statements?.some(s => ['insert', 'update', 'delete', 'create'].includes(s.type))) setDataVersion(v => v + 1)
@@ -42,7 +46,9 @@ export default function App() {
     return res
   }
 
+  const consultaEspacial = !result?.error && CONSULTA_ESPACIAL.test(ultimaConsulta)
   const mbrActivos = vista === 'indices' && rectangulos !== null
+  const mostrarMapa = consultaEspacial || mbrActivos
 
   return (
     <div className="app">
@@ -52,9 +58,11 @@ export default function App() {
       </header>
       <div className="layout">
         <FilesPanel tables={tables} onImport={importar} loading={loading} />
-        <div className="workarea">
+        <div className={mostrarMapa ? 'workarea' : 'workarea sin-mapa'}>
           <QueryPanel onRun={ejecutar} loading={loading} />
-          <MapPanel tables={tables} result={result} dataVersion={dataVersion} location={location} onLocation={setLocation} rectangulos={mbrActivos ? rectangulos : null} />
+          {mostrarMapa && (
+            <MapPanel tables={tables} result={result} dataVersion={dataVersion} location={location} onLocation={setLocation} rectangulos={mbrActivos ? rectangulos : null} />
+          )}
           <div className="bottom">
             <div className="stack">
               <div className="tabbar">
