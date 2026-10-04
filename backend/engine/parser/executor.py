@@ -1,26 +1,18 @@
 import operator
+import time
 from .visitor import Visitor
+from .nodes import Compare
 from ..catalog import StorageTable
 from ..transactions import Resource, TransactionError, TransactionManager
-from ..external import external_sort
-from ..hashing import external_group_by
+from ..plan import base_de, planner, reporte
+from ..plan.costos import Perfil
 from datetime import date
 
 
 class SemanticError(Exception):
     pass
 
-COMPARADORES = {
-    "=": operator.eq, "!=": operator.ne,
-    "<": operator.lt, "<=": operator.le,
-    ">": operator.gt, ">=": operator.ge,
-}
-
 MEM_BUDGET = 32
-
-
-def _grupo_unico(fila):
-    return 0
 
 class Table:
 
@@ -88,6 +80,8 @@ class Executor(Visitor):
             else:
                 salida["columns"] = resultado["columns"]
                 salida["rows"] = resultado["rows"]
+            if resultado is not None and "explain" in resultado:
+                salida["explain"] = resultado["explain"]
             salidas.append(salida)
         return salidas
 
@@ -102,16 +96,10 @@ class Executor(Visitor):
             raise SemanticError(f"la columna '{nombre}' no existe en '{tabla.name}'")
         return nombre
 
-    def _base(self, tabla):
-        clustered = getattr(tabla, "is_clustered", False)
-        if clustered:
-            return "sequential"
-        return "heap"
-
     def _paso(self, op, method, detail, rows):
         return {"op": op, "method": method, "detail": detail, "rows": rows}
 
-    def visit_Insert(self, node):
+    def _plan_insert(self, node):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla)
         if len(node.values) != len(tabla.columns):
@@ -125,63 +113,116 @@ class Executor(Visitor):
                     date.fromisoformat(valor)
                 except (TypeError, ValueError):
                     raise SemanticError(f"'{valor}' no es una fecha válida (formato YYYY-MM-DD)")
-        tabla.insert(dict(zip(tabla.columns, node.values)))
-        self.plan.append(self._paso("Insert", self._base(tabla), tabla.name, 1))
-        return {"message": f"1 fila insertada en '{tabla.name}'"}
+        fila = dict(zip(tabla.columns, node.values))
+        hijo = planner.resultado(fila, Perfil(tabla).ancho)
 
-    def visit_Delete(self, node):
+        def aplicar(filas):
+            for f in filas:
+                tabla.insert(f)
+            return len(filas)
+
+        return planner.modificar("Insert", tabla, hijo, aplicar, base_de(tabla), tabla.name)
+
+    def visit_Insert(self, node):
+        raiz = self._plan_insert(node)
+        self._ejecutar(raiz)
+        self._mantener(raiz.tabla)
+        return {"message": f"1 fila insertada en '{raiz.tabla.name}'"}
+
+    def _plan_delete(self, node):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla)
-        filas = self._filtrar(tabla, node.where)
-        eliminadas = tabla.remove(filas)
-        self.plan.append(self._paso("Delete", "lazy", tabla.name, eliminadas))
-        return {"message": f"{eliminadas} fila(s) eliminada(s) de '{tabla.name}'"}
+        hijo = self._acceso(tabla, node.where)
+        return planner.modificar("Delete", tabla, hijo, tabla.remove, "lazy", tabla.name)
 
-    def visit_Select(self, node):
+    def visit_Delete(self, node):
+        raiz = self._plan_delete(node)
+        self._ejecutar(raiz)
+        self._mantener(raiz.tabla)
+        return {"message": f"{raiz.afectadas} fila(s) eliminada(s) de '{raiz.tabla.name}'"}
+
+    def _plan_select(self, node):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla)
         columnas = tabla.columns if node.columns is None else node.columns
         for c in columnas:
             self._columna(tabla, c)
 
-        filas = self._filtrar(tabla, node.where)
+        raiz = self._acceso(tabla, node.where)
 
         if node.group_by is not None:
             self._columna(tabla, node.group_by)
             specs, nombres = self._agg_specs(tabla, node)
-            clave_fn = operator.itemgetter(node.group_by)
-            nuevas = []
-            for clave, valores in external_group_by(filas, key_fn=clave_fn, specs=specs, mem_budget=MEM_BUDGET):
-                fila = {node.group_by: clave}
-                for i in range(len(nombres)):
-                    fila[nombres[i]] = valores[i]
-                nuevas.append(fila)
-            filas = nuevas
+            raiz = planner.agregar(raiz, tabla, node.group_by, specs, nombres, MEM_BUDGET)
             columnas = [node.group_by]
             for nombre in nombres:
                 columnas.append(nombre)
-            self.plan.append(self._paso("Group By", "external-hash", node.group_by, len(filas)))
         elif node.aggregates is not None:
             specs, nombres = self._agg_specs(tabla, node)
-            fila = {}
-            for clave, valores in external_group_by(filas, key_fn=_grupo_unico, specs=specs, mem_budget=MEM_BUDGET):
-                for i in range(len(nombres)):
-                    fila[nombres[i]] = valores[i]
-            if not fila:
-                for nombre in nombres:
-                    fila[nombre] = 0
-            filas = [fila]
-            columnas = []
-            for nombre in nombres:
-                columnas.append(nombre)
-            self.plan.append(self._paso("Aggregate", "external-hash", ",".join(nombres), 1))
+            raiz = planner.agregar(raiz, tabla, None, specs, nombres, MEM_BUDGET)
+            columnas = list(nombres)
 
         if node.order_by is not None:
-            filas = list(external_sort(filas, key_fn=operator.itemgetter(node.order_by), mem_budget=MEM_BUDGET))
-            self.plan.append(self._paso("Order By", "external-merge", node.order_by, len(filas)))
+            raiz = planner.ordenar(raiz, node.order_by, MEM_BUDGET)
 
+        return raiz, columnas, tabla
+
+    def visit_Select(self, node):
+        raiz, columnas, tabla = self._plan_select(node)
+        filas = self._ejecutar(raiz)
         self.plan.append(self._paso("Project", ",".join(columnas), tabla.name, len(filas)))
         return {"columns": columnas, "rows": filas}
+
+    def _ejecutar(self, raiz):
+        filas = list(raiz.iterar())
+        self.plan.extend(raiz.traza())
+        return filas
+
+    def _mantener(self, tabla):
+        autoanalyze = getattr(tabla, "autoanalyze", None)
+        if autoanalyze is not None:
+            autoanalyze()
+
+    def _planificar(self, sentencia):
+        nombre = type(sentencia).__name__
+        if nombre == "Select":
+            raiz, columnas, tabla = self._plan_select(sentencia)
+            return raiz
+        if nombre == "Insert":
+            return self._plan_insert(sentencia)
+        if nombre == "Delete":
+            return self._plan_delete(sentencia)
+        if nombre == "Update":
+            return self._plan_update(sentencia)
+        raise SemanticError("EXPLAIN solo admite SELECT, INSERT, UPDATE o DELETE")
+
+    def visit_Explain(self, node):
+        inicio = time.perf_counter()
+        raiz = self._planificar(node.statement)
+        planificacion = time.perf_counter() - inicio
+        ejecucion = 0.0
+        if node.analyze:
+            inicio = time.perf_counter()
+            for _ in raiz.iterar():
+                pass
+            ejecucion = time.perf_counter() - inicio
+            self.plan.extend(raiz.traza())
+            if hasattr(raiz, "afectadas"):
+                self._mantener(raiz.tabla)
+        explain = reporte(raiz, node.analyze, planificacion, ejecucion)
+        filas = []
+        for linea in explain["text"]:
+            filas.append({"QUERY PLAN": linea})
+        return {"columns": ["QUERY PLAN"], "rows": filas, "explain": explain}
+
+    def visit_Analyze(self, node):
+        tabla = self._tabla(node.table)
+        self._bloquear_tabla(tabla)
+        if not hasattr(tabla, "analyze"):
+            return {"message": f"ANALYZE {tabla.name}: tabla en memoria, sin estadísticas"}
+        estadisticas = tabla.analyze()
+        self.plan.append(self._paso("Analyze", base_de(tabla), tabla.name, estadisticas["filas"]))
+        return {"message": f"ANALYZE {tabla.name}: {estadisticas['filas']} filas, {len(estadisticas['columnas'])} columnas"}
 
     def _agg_specs(self, tabla, node):
         specs = []
@@ -202,41 +243,42 @@ class Executor(Visitor):
             nombres.append(func + "_" + arg)
         return specs, nombres
 
-    def _filtrar(self, tabla, where):
-        if where is None:
-            filas = tabla.scan()
-            self.plan.append(self._paso("Sequential Scan", self._base(tabla), tabla.name, len(filas)))
-            return filas
+    def _acceso(self, tabla, where):
+        if where is not None:
+            self._columna(tabla, where.column)
+            where = Compare(where.column, where.op, self._convertir(tabla, where.column, where.value))
+        return planner.acceso(tabla, where)
 
-        self._columna(tabla, where.column)
+    @staticmethod
+    def _tipo_columna(tabla, columna):
+        schema = getattr(tabla, "schema", None)
+        if schema:
+            return dict(schema).get(columna, "str")
+        tipo = getattr(tabla, "column_types", {}).get(columna)
+        if tipo == "INT":
+            return "int"
+        if tipo == "FLOAT":
+            return "float"
+        return "str"
 
-        if where.op == "=" and where.column == tabla.index_column:
-            filas = tabla.search(where.column, where.value)
-            metodo = str(tabla.index_kind) + "(" + str(tabla.index_column) + ")"
-            detalle = str(where.column) + " = " + str(where.value)
-            self.plan.append(self._paso("Index Search", metodo, detalle, len(filas)))
-            return filas
-
-        if where.op in (">", ">=", "<", "<=") and where.column == tabla.index_column and hasattr(tabla, "search_range"):
-            filas = tabla.search_range(where.op, where.value)
-            if filas is not None:
-                metodo = str(tabla.index_kind) + "(" + str(tabla.index_column) + ")"
-                detalle = str(where.column) + " " + str(where.op) + " " + str(where.value)
-                self.plan.append(self._paso("Range Search", metodo, detalle, len(filas)))
-                return filas
-
-        detalle = str(where.column) + " " + str(where.op) + " " + str(where.value)
-        comparar = COMPARADORES[where.op]
-        todas = tabla.scan()
-        filas = []
-        for f in todas:
-            if comparar(f[where.column], where.value):
-                filas.append(f)
-        self.plan.append(self._paso("Sequential Scan + Filter", self._base(tabla), detalle, len(filas)))
-        return filas
+    def _convertir(self, tabla, columna, valor):
+        tipo = self._tipo_columna(tabla, columna)
+        if tipo == "int" and isinstance(valor, str):
+            try:
+                return int(valor)
+            except ValueError:
+                raise SemanticError(f"'{valor}' no es un valor válido para la columna INT '{columna}'")
+        if tipo == "float" and isinstance(valor, (str, int)):
+            try:
+                return float(valor)
+            except ValueError:
+                raise SemanticError(f"'{valor}' no es un valor válido para la columna FLOAT '{columna}'")
+        if tipo == "str" and not isinstance(valor, str):
+            return str(valor)
+        return valor
 
     def visit_Compare(self, node):
-        raise SemanticError("las condiciones se evalúan dentro de _filtrar")
+        raise SemanticError("las condiciones se evalúan dentro del planificador")
 
     @staticmethod
     def _imprimir(columnas, filas):
@@ -302,22 +344,29 @@ class Executor(Visitor):
         self.plan.append(self._paso("Create Table", "heap", node.table, 0))
         return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
 
-    def visit_Update(self, node):
+    def _plan_update(self, node):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla)
         for columna, _ in node.assignments:
             self._columna(tabla, columna)
-        filas = self._filtrar(tabla, node.where)
-        if isinstance(tabla, StorageTable):
-            total = tabla.update_rows(filas, node.assignments)
-        else:
+        hijo = self._acceso(tabla, node.where)
+
+        def aplicar(filas):
+            if isinstance(tabla, StorageTable):
+                return tabla.update_rows(filas, node.assignments)
             for fila in filas:
                 for columna, valor in node.assignments:
                     fila[columna] = valor
-            total = len(filas)
+            return len(filas)
+
         columnas = ",".join(c for c, _ in node.assignments)
-        self.plan.append(self._paso("Update", self._base(tabla), columnas, total))
-        return {"message": f"{total} fila(s) actualizada(s) en '{tabla.name}'"}
+        return planner.modificar("Update", tabla, hijo, aplicar, base_de(tabla), columnas)
+
+    def visit_Update(self, node):
+        raiz = self._plan_update(node)
+        self._ejecutar(raiz)
+        self._mantener(raiz.tabla)
+        return {"message": f"{raiz.afectadas} fila(s) actualizada(s) en '{raiz.tabla.name}'"}
 
     def visit_ColumnDef(self, node):
         return None

@@ -47,6 +47,10 @@ def _tipo(sentencia):
         return "begin"
     if nombre == "EndTransaction":
         return "end"
+    if nombre == "Explain":
+        return "explain"
+    if nombre == "Analyze":
+        return "analyze"
     return "unknown"
 
 
@@ -89,6 +93,8 @@ def query(body: QueryBody):
     for i in range(len(sentencias)):
         salida = salidas[i]
         item = {"type": _tipo(sentencias[i]), "plan": salida["plan"]}
+        if "explain" in salida:
+            item["explain"] = salida["explain"]
         if "error" in salida:
             item["error"] = salida["error"]
         elif "columns" in salida:
@@ -118,5 +124,9 @@ def query(body: QueryBody):
         if "columns" in item:
             respuesta["columns"] = item["columns"]
             respuesta["rows"] = item["rows"]
+            break
+    for item in reversed(statements):
+        if "explain" in item:
+            respuesta["explain"] = item["explain"]
             break
     return respuesta

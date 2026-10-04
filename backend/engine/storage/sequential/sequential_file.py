@@ -2,6 +2,8 @@ import os
 import struct
 import operator
 
+from engine.common.io_stats import touch
+
 
 class SequentialFile:
     FILE_HEADER_FORMAT = "iiiii"
@@ -33,6 +35,7 @@ class SequentialFile:
             f.write(struct.pack(self.FILE_HEADER_FORMAT, 0, 0, 0, self.SLOT_SIZE, -1))
 
     def read_header(self):
+        touch(self.filename, -1)
         with open(self.filename, "rb") as f:
             data = f.read(self.FILE_HEADER_SIZE)
             if len(data) != self.FILE_HEADER_SIZE:
@@ -40,6 +43,7 @@ class SequentialFile:
             return struct.unpack(self.FILE_HEADER_FORMAT, data)
 
     def write_header(self, main_count, total_slots, deleted_count, record_size, overflow_head):
+        touch(self.filename, -1)
         with open(self.filename, "r+b") as f:
             f.seek(0)
             f.write(struct.pack(
@@ -60,6 +64,7 @@ class SequentialFile:
 
     def read_record(self, position):
         page_id, slot, page_start, offset = self._locate(position)
+        touch(self.filename, page_id)
         with open(self.filename, "rb") as f:
             f.seek(offset)
             raw = f.read(self.SLOT_SIZE)
@@ -69,12 +74,14 @@ class SequentialFile:
 
     def write_record(self, position, slot_tuple):
         page_id, slot, page_start, offset = self._locate(position)
+        touch(self.filename, page_id)
         with open(self.filename, "r+b") as f:
             f.seek(offset)
             f.write(struct.pack(self.RECORD_WITH_POINTER_FORMAT, *slot_tuple))
 
     def _append_slot(self, position, slot_tuple):
         page_id, slot, page_start, offset = self._locate(position)
+        touch(self.filename, page_id)
         with open(self.filename, "r+b") as f:
             if slot == 0:
                 f.seek(page_start)
@@ -209,6 +216,7 @@ class SequentialFile:
                     place = self.PAGE_HEADER_SIZE + s * self.SLOT_SIZE
                     struct.pack_into(self.RECORD_WITH_POINTER_FORMAT, page, place, *(record + (-1, 0)))
                     s += 1
+                touch(self.filename, page_id)
                 f.write(page)
                 index += count
                 page_id += 1

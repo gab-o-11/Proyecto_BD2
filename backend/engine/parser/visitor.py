@@ -21,6 +21,10 @@ class Visitor(ABC):
     def visit_ColumnDef(self, node): ...
     @abstractmethod
     def visit_Update(self, node): ...
+    @abstractmethod
+    def visit_Explain(self, node): ...
+    @abstractmethod
+    def visit_Analyze(self, node): ...
 
 class PrintVisitor(Visitor):
     def render(self, sentencias) -> str:
@@ -76,3 +80,10 @@ class PrintVisitor(Visitor):
         if node.where is not None:
             sql += " WHERE " + node.where.accept(self)
         return sql
+
+    def visit_Explain(self, node):
+        prefijo = "EXPLAIN ANALYZE " if node.analyze else "EXPLAIN "
+        return prefijo + node.statement.accept(self)
+
+    def visit_Analyze(self, node):
+        return f"ANALYZE {node.table}"
