@@ -258,13 +258,14 @@ Pipeline clásico de compilador (trabajo del equipo, ya mergeado):
 - **`tokens.py`** — enum `TokenType` + `KEYWORDS`.
 - **`scanner.py`** — `Scanner`: análisis léxico carácter por carácter. Reconoce símbolos, números (INT/FLOAT), palabras (keyword vs identificador, case-insensitive) y strings entre comillas simples. Lanza `LexicalError`.
 - **`sql_parser.py`** — `Parser`: descenso recursivo. Gramática soportada (ver comentarios de cada método):
-  - `SELECT (col,... | agg(col)... | *) FROM t [WHERE cond] [GROUP BY col] [ORDER BY col]` — `agg` ∈ `COUNT/SUM/AVG/MIN/MAX` (`COUNT(*)` permitido; el resto exige columna).
+  - `SELECT (col,... | agg(col)... | *) FROM t [alias] [JOIN u [alias] ON col = col] [WHERE cond] [GROUP BY col] [ORDER BY expresión [ASC|DESC]] [LIMIT n]` — `agg` ∈ `COUNT/SUM/AVG/MIN/MAX` (`COUNT(*)` permitido; el resto exige columna).
   - `INSERT INTO t VALUES (v,...)`
   - `DELETE FROM t WHERE cond`
   - `UPDATE t SET col=val,... [WHERE cond]`
-  - `CREATE TABLE t (col TIPO [PRIMARY KEY] [NOT NULL], ...) [USING <índice>]` con tipos `INT | FLOAT | VARCHAR(n)`. `PRIMARY KEY` fija la columna indexada; `USING` elige el tipo: `HASH` (default) | `BPLUS` | `BPLUS_CLUSTERED`.
+  - `CREATE TABLE t (col TIPO [PRIMARY KEY] [NOT NULL], ...) [USING <índice>]` con tipos `INT | FLOAT | VARCHAR(n) | DATE | POINT`. `PRIMARY KEY` fija una columna escalar indexada; `USING` elige el tipo: `HASH` (default) | `BPLUS` | `BPLUS_CLUSTERED`.
   - `BEGIN TRANSACTION` / `END TRANSACTION`
   - `cond` = **una** comparación `col OP valor` con `OP ∈ { =, !=, <, <=, >, >= }`. No hay `AND/OR/BETWEEN`.
+  - Extensión espacial: `distancia(punto, punto [, 'haversine'|'euclidean'])` en condiciones y ordenamiento. Cada punto puede ser un literal `POINT(lat, lon)`, una columna `POINT` o un parámetro recibido en `parameters` del API. Haversine devuelve metros; Euclidiana devuelve unidades de coordenadas. `LIMIT` admite enteros no negativos. Radio y k-NN sin WHERE usan R-Tree; `intersecta(columna, POLYGON(POINT(...), ...))` usa MBR y prueba punto-en-polígono. JOIN, comparaciones entre columnas y orden descendente conservan scan/sort. El panel Leaflet resalta las geometrías devueltas, incluso con proyección de IDs. Los índices derivados se reconstruyen al reiniciar o tras cambios de posiciones clustered.
 - **`nodes.py`** — dataclasses del AST (`Select`, `Insert`, `Delete`, `Update`, `CreateTable`, `Compare`, `ColumnDef`, `BeginTransaction`, `EndTransaction`). Cada `Node.accept(visitor)` despacha a `visit_<ClaseNodo>` (patrón **Visitor**).
 - **`visitor.py`** — clase base `Visitor`.
 - **`executor.py`** — `Executor(Visitor)`: recorre el AST y ejecuta. Ver §2.4.
@@ -280,7 +281,7 @@ El corazón de la ejecución. Puntos importantes:
   - `where.op ∈ {>, >=, <, <=} and where.column == tabla.index_column` → `tabla.search_range(op, val)` → plan `Range Search`. Funciona con B+ (agrupado y no agrupado) y claves numéricas; el hashing devuelve `None` y cae al scan.
   - Cualquier otro caso (u operador no soportado por el índice) → `scan()` + filtro en memoria → plan `Sequential Scan + Filter`.
 - **`visit_Select`** aplica, en orden: filtro → GROUP BY (o agregación global) → ORDER BY → proyección.
-  - **GROUP BY** usa `external_group_by` de `external_hash.py` (Grace hashing con spill a disco) vía `_agg_specs`. Plan `Group By (external-hash)`. Sin agregaciones explícitas devuelve `(columna, conteo)`; con ellas soporta `COUNT/SUM/AVG/MIN/MAX`.
+  - **GROUP BY** usa `external_group_by` de `external_hash.py` (Grace hashing con spill a disco) vía `_agg_specs`. Plan `Group By (external-hash)`. Soporta `COUNT/SUM/AVG/MIN/MAX` y conserva la proyección solicitada. `SELECT * ... GROUP BY columna` mantiene la salida `(columna, conteo)` de la demo.
   - **Agregación global** (agregaciones sin `GROUP BY`, ej. `SELECT COUNT(*) FROM t`) → una sola fila. Plan `Aggregate (external-hash)`.
   - **ORDER BY** usa `external_sort` de `external_sort.py` (runs a disco + `heapq.merge` k-way). Plan `Order By (external-merge)`. El umbral de spill es la constante `MEM_BUDGET` en `executor.py` (bájala para forzar spill en la demo).
 - **`visit_CreateTable`** — si hay `data_dir`, crea una `StorageTable` real en disco. `index_column` viene del `PRIMARY KEY` (o la primera columna si no hay); `index_kind` viene de la cláusula `USING` (o `HASH` si se omite). Si no hay `data_dir`, cae a la `Table` en memoria.
@@ -363,7 +364,7 @@ Contrato común de los tres índices: `insert(key, rid)`, `search(key) → [rid.
 
 ### 2.8 Algoritmos externos — `engine/external/` y `hashing/external_hash.py`
 
-Parte 2.1.2 de "external algorithms". El sort y el group_by **ya están cableados** al executor (§2.4); el `grace_hash_join` sigue disponible pero sin sintaxis `JOIN` en la gramática:
+Parte 2.1.2 de "external algorithms". El sort, el group_by y el `grace_hash_join` están conectados al executor (§2.4). `JOIN` admite dos tablas y una comparación de igualdad en `ON`, con alias opcionales:
 
 - **`external/external_sort.py`** — `external_sort(rows, key_fn, mem_budget, reverse)`: genera *runs* ordenados a disco (pickle) cuando el chunk supera `mem_budget`, y luego los fusiona con `heapq.merge` (**k-way merge**). Soporta asc/desc. **Lo usa `ORDER BY`.**
 - **`hashing/external_hash.py`**:
@@ -379,7 +380,7 @@ Parte 2.1.2 de "external algorithms". El sort y el group_by **ya están cableado
 - **`lock_manager.py`**: `LockManager` implementa los modos `PS` (compartido), `PU` (actualización) y `PX` (exclusivo), coordina la espera con `threading.Condition` (timeout 5 s), permite conversiones de lock y registra historial `WAIT/ACQUIRED/UPGRADED/RELEASED`.
 - **`manager.py`**: `TransactionManager` — una transacción activa por `thread_id`; `begin/current/end/acquire`. `acquire` recibe el modo de lock y `end()` hace `release_all` (libera todo hasta el END → 2PL estricto).
 - **`demo.py`**: evidencia de *lost update* — dos hilos sobre un valor inicial 100 (uno +50, otro −30). Sin locks el resultado es 70 (una escritura pisa a la otra); con locks es 120.
-- **Límites actuales**: no hay ROLLBACK, ni detección de deadlocks, ni bloqueos compartidos, ni niveles de aislamiento configurables.
+- **Límites actuales**: no hay ROLLBACK, detección de deadlocks ni niveles de aislamiento configurables. El API exige enviar BEGIN y END en una misma petición y comparte los bloqueos entre usuarios. Fuera de bloques explícitos, cada sentencia usa una transacción implícita.
 
 ### 2.10 Frontend — `frontend/src/`
 
@@ -423,5 +424,5 @@ React + Vite, tema claro estilo pgAdmin.
 
 - El `WHERE` acepta **una sola** comparación (sin `AND/OR/BETWEEN`). Igualdad y rango (`> >= < <=`) sobre la columna indexada usan el índice (B+); el resto cae a scan.
 - Búsqueda por rango: solo la aprovechan los índices B+ (agrupado y no agrupado) con claves numéricas; el extendible hashing no soporta rangos (cae a scan + filtro).
-- **No hay `JOIN`** en la gramática: `grace_hash_join` está implementado pero no es alcanzable desde SQL.
+- `JOIN` soporta un join interno por igualdad entre dos tablas; no hay joins externos ni encadenamiento de varios joins.
 - El catálogo es **persistente**: se siembra solo la primera vez y en arranques posteriores redescubre las tablas leyendo los descriptores `.tbl` de `data/runtime/`. Las tablas creadas en runtime con `CREATE TABLE` también sobreviven a reinicios. Para volver al estado sembrado inicial, borra la carpeta `data/runtime/`.
