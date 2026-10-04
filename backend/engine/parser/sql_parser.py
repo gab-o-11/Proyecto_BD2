@@ -57,7 +57,7 @@ class Parser:
     def _encontrado(self):
         if self.current.type == TokenType.EOF:
             return "fin de la consulta"
-        return f"{self._encontrado()}"
+        return f"'{self.current.lexeme}'"
 
     # program -> statement { ';' statement } [ ';' ] EOF
     def parse_program(self):
@@ -208,12 +208,14 @@ class Parser:
 
     def _coordinate(self):
         if not self._match(TokenType.INT, TokenType.FLOAT):
-            raise ParseError(f"Línea {self.current.line}: se esperaba una coordenada numérica")
-        value = float(self.previous.lexeme)
-        if not math.isfinite(value):
             raise ParseError(
                 f"Línea {self.current.line}: se esperaba una coordenada numérica, "
                 f"se encontró {self._encontrado()}"
+            )
+        value = float(self.previous.lexeme)
+        if not math.isfinite(value):
+            raise ParseError(
+                f"Línea {self.previous.line}: la coordenada '{self.previous.lexeme}' debe ser finita"
             )
         return value
 
