@@ -1,6 +1,7 @@
 import operator
 import time
 from .visitor import Visitor
+from .nodes import Compare
 from ..catalog import StorageTable
 from ..transactions import Resource, TransactionError, TransactionManager
 from ..plan import base_de, planner, reporte
@@ -245,7 +246,36 @@ class Executor(Visitor):
     def _acceso(self, tabla, where):
         if where is not None:
             self._columna(tabla, where.column)
+            where = Compare(where.column, where.op, self._convertir(tabla, where.column, where.value))
         return planner.acceso(tabla, where)
+
+    @staticmethod
+    def _tipo_columna(tabla, columna):
+        schema = getattr(tabla, "schema", None)
+        if schema:
+            return dict(schema).get(columna, "str")
+        tipo = getattr(tabla, "column_types", {}).get(columna)
+        if tipo == "INT":
+            return "int"
+        if tipo == "FLOAT":
+            return "float"
+        return "str"
+
+    def _convertir(self, tabla, columna, valor):
+        tipo = self._tipo_columna(tabla, columna)
+        if tipo == "int" and isinstance(valor, str):
+            try:
+                return int(valor)
+            except ValueError:
+                raise SemanticError(f"'{valor}' no es un valor válido para la columna INT '{columna}'")
+        if tipo == "float" and isinstance(valor, (str, int)):
+            try:
+                return float(valor)
+            except ValueError:
+                raise SemanticError(f"'{valor}' no es un valor válido para la columna FLOAT '{columna}'")
+        if tipo == "str" and not isinstance(valor, str):
+            return str(valor)
+        return valor
 
     def visit_Compare(self, node):
         raise SemanticError("las condiciones se evalúan dentro del planificador")
