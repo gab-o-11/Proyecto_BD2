@@ -44,7 +44,7 @@ class Perfil:
             self.paginas = max(1, math.ceil(self.filas / self.filas_por_pagina))
             self.altura = 1
         indice = getattr(tabla, "index", None)
-        self.block_factor = getattr(indice, "block_factor", DEFAULT_BLOCK_FACTOR)
+        self.block_factor = getattr(indice, "block_factor", None) or getattr(indice, "order", None) or DEFAULT_BLOCK_FACTOR
         self.columnas = {}
         if estadisticas:
             self.columnas = estadisticas.get("columnas", {})
