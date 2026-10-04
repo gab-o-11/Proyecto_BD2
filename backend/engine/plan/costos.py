@@ -54,7 +54,7 @@ class Perfil:
     def selectividad(self, condicion):
         info = self.columnas.get(condicion.column)
         valor = condicion.value
-        if condicion.op in ("=", "!="):
+        if condicion.op in ("=", "!=", "<>"):
             if not info or not info.get("n_distinct"):
                 sel = DEFAULT_EQ_SEL
             else:
@@ -63,7 +63,7 @@ class Perfil:
                 if _es_numero(valor) and _es_numero(bajo) and _es_numero(alto):
                     if valor < bajo or valor > alto:
                         sel = 0.0
-            if condicion.op == "!=":
+            if condicion.op in ("!=", "<>"):
                 return 1.0 - sel
             return sel
         if not info:
