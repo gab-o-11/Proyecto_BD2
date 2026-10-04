@@ -573,6 +573,40 @@ class RTree:
         return [entry.payload for entry in sorted(entries, key=lambda e: e.ordinal)
                 if contains_point(vertices, entry.coordinates)]
 
+    def describir_nodo(self, pid=None, profundidad=0):
+        if pid is None:
+            pid = self.root_id
+        nodo = self._leer(pid)
+        salida = {"pagina": pid, "hoja": nodo.leaf, "mbr": None if nodo.bounds is None else list(nodo.bounds)}
+        if nodo.leaf:
+            salida["puntos"] = [{"coordenadas": list(e.coordinates),
+                                 "rid": list(e.payload) if isinstance(e.payload, tuple) else e.payload}
+                                for e in nodo.children]
+            return salida
+        salida["hijos"] = [{"pagina": ref.pid, "mbr": list(ref.bounds), "entradas": ref.count} for ref in nodo.children]
+        if profundidad > 0:
+            salida["nodos"] = [self.describir_nodo(ref.pid, profundidad - 1) for ref in nodo.children]
+        return salida
+
+    def rectangulos(self, niveles, limite):
+        salida = []
+        actual = [self.root_id]
+        for nivel in range(niveles):
+            siguiente = []
+            for pid in actual:
+                nodo = self._leer(pid)
+                if nodo.bounds is None:
+                    continue
+                salida.append({"nivel": nivel, "pagina": pid, "hoja": nodo.leaf, "mbr": list(nodo.bounds)})
+                if len(salida) >= limite:
+                    return salida
+                if not nodo.leaf:
+                    siguiente.extend(ref.pid for ref in nodo.children)
+            if not siguiente:
+                break
+            actual = siguiente
+        return salida
+
     def bytes_en_disco(self):
         return os.path.getsize(self.nodes_path) + os.path.getsize(self.meta_path)
 

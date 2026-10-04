@@ -237,6 +237,20 @@ class BPlusTree:
         for key, rid in pairs:
             self.insert(key, rid)
 
+    def describir_nodo(self, page_id=None, profundidad=0):
+        if page_id is None:
+            page_id = self.root_id
+        node = self._read(page_id)
+        salida = {"pagina": page_id, "hoja": node.is_leaf, "claves": list(node.keys)}
+        if node.is_leaf:
+            salida["rids"] = [list(rid) for rid in node.rids]
+            salida["siguiente"] = node.next_leaf
+            return salida
+        salida["hijos"] = list(node.children)
+        if profundidad > 0:
+            salida["nodos"] = [self.describir_nodo(hijo, profundidad - 1) for hijo in node.children]
+        return salida
+
     def stats(self):
         leaves = 0
         internals = 0

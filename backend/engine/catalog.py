@@ -262,6 +262,43 @@ class StorageTable(SpatialTable):
         self.analyze()
         return len(rows)
 
+    def _arbol_de(self, columna):
+        if columna in self.spatial_indexes:
+            return "RTREE", self.spatial_indexes[columna]
+        if columna == self.index_field and self.index_kind == "BPLUS_CLUSTERED":
+            return self.index_kind, self.index.tree
+        if columna == self.index_field and self.index_kind == "BPLUS":
+            return self.index_kind, self.index
+        raise ValueError(f"la columna '{columna}' de '{self.name}' no tiene un índice en árbol (B+ o R-Tree)")
+
+    def describir_indice(self, columna, pagina=None, profundidad=0):
+        tipo, arbol = self._arbol_de(columna)
+        return {
+            "tabla": self.name,
+            "columna": columna,
+            "tipo": tipo,
+            "altura": arbol.height,
+            "raiz": arbol.root_id,
+            "orden": arbol.max_entries if tipo == "RTREE" else arbol.order,
+            "nodo": arbol.describir_nodo(pagina, profundidad),
+        }
+
+    def rectangulos_rtree(self, columna, niveles, limite):
+        tipo, arbol = self._arbol_de(columna)
+        if tipo != "RTREE":
+            raise ValueError(f"la columna '{columna}' no tiene R-Tree")
+        return arbol.rectangulos(niveles, limite)
+
+    def archivos_de_indices(self):
+        salida = {}
+        for columna, arbol in self.spatial_indexes.items():
+            salida[arbol.nodes_path] = (columna, "RTREE")
+        if self.index_kind == "BPLUS_CLUSTERED":
+            salida[self.index.tree.nodes_path] = (self.index_field, self.index_kind)
+        elif self.index_kind == "BPLUS":
+            salida[self.index.nodes_path] = (self.index_field, self.index_kind)
+        return salida
+
     def _ruta_rtree(self, column):
         return os.path.join(self.data_dir, self.name + "_" + column + "_rtree")
 

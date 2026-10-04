@@ -9,7 +9,7 @@ from engine.catalog import create_catalog, table_info
 from engine.parser.scanner import Scanner
 from engine.parser.sql_parser import Parser
 from engine.parser.executor import Executor
-from engine.transactions import TransactionManager
+from engine.transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from engine.catalog import StorageTable
 from engine.importer import CSVImportError, parse_csv
 
@@ -115,6 +115,8 @@ def query(body: QueryBody):
             item["spatial"] = salida["spatial"]
         if "explain" in salida:
             item["explain"] = salida["explain"]
+        if "paginas" in salida:
+            item["recorrido"] = _recorrido(salida["paginas"])
         if "error" in salida:
             item["error"] = salida["error"]
         elif "columns" in salida:
@@ -149,7 +151,54 @@ def query(body: QueryBody):
         if "explain" in item:
             respuesta["explain"] = item["explain"]
             break
+    for item in reversed(statements):
+        if item.get("recorrido"):
+            respuesta["recorrido"] = item["recorrido"]
+            break
     return respuesta
+
+
+def _recorrido(paginas):
+    indices = {}
+    for nombre in catalog:
+        for ruta, (columna, tipo) in catalog[nombre].archivos_de_indices().items():
+            indices[ruta] = (nombre, columna, tipo)
+    agrupado = {}
+    for ruta, pagina in paginas:
+        if ruta not in indices:
+            continue
+        agrupado.setdefault(indices[ruta], []).append(pagina)
+    salida = []
+    for (tabla, columna, tipo), visitadas in agrupado.items():
+        salida.append({"tabla": tabla, "columna": columna, "tipo": tipo, "paginas": sorted(visitadas)})
+    return salida
+
+
+def _leer_indice(nombre, accion):
+    if nombre not in catalog:
+        return {"error": f"la tabla '{nombre}' no existe"}
+    tabla = catalog[nombre]
+    transaction_manager.begin()
+    try:
+        transaction_manager.acquire(Resource("table", nombre), LockMode.PS)
+        return accion(tabla)
+    except (ValueError, LockError, TransactionError) as error:
+        return {"error": str(error)}
+    finally:
+        transaction_manager.end()
+
+
+@app.get("/api/tables/{nombre}/index")
+def describir_indice(nombre: str, column: str, page: int | None = None, depth: int = 1):
+    profundidad = max(0, min(depth, 3))
+    return _leer_indice(nombre, lambda tabla: tabla.describir_indice(column, page, profundidad))
+
+
+@app.get("/api/tables/{nombre}/index/rects")
+def rectangulos_indice(nombre: str, column: str, levels: int = 3, limit: int = 3000):
+    niveles = max(1, min(levels, 12))
+    tope = max(1, min(limit, 10000))
+    return _leer_indice(nombre, lambda tabla: {"rectangulos": tabla.rectangulos_rtree(column, niveles, tope)})
 
 
 @app.post("/api/tables/import")
