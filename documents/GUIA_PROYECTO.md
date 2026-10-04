@@ -398,7 +398,7 @@ React + Vite, tema claro estilo pgAdmin.
 ### 2.11 Datos y benchmarks
 
 - **`data/generate_data.py`** — genera CSV (`records_N.csv`, `details_N.csv`) para N = 1k/10k/100k, semilla 2026, parametrizable con `--sizes/--seed/--output-dir`. Es insumo para la parte experimental (2.1.6, otro compañero).
-- **`benchmarks/benchmark.ipynb`** — borrador de análisis (mediciones desactivadas hasta cablear todo).
+- **`benchmarks/benchmark.ipynb`** — análisis ejecutable: pruebas de regresión/directas, almacenamiento, índices con recuperación de filas, modificaciones, algoritmos externos y resultados espaciales del R-Tree en disco. Reproducción en `benchmarks/README.md`; evidencia en `benchmarks/relational_results/` y `benchmarks/spatial_results/`.
 
 ---
 

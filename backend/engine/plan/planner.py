@@ -103,7 +103,6 @@ def unir(izquierda, derecha, clave_izquierda, clave_derecha, memoria):
     total = inicio + (izquierda.filas_est + derecha.filas_est + filas) * costos.CPU_TUPLE_COST
     return HashJoin(izquierda, derecha, clave_izquierda, clave_derecha, memoria).estimar(inicio, total, filas, izquierda.ancho + derecha.ancho)
 
-
 def filtrar(hijo, condicion, key_fn=None, detail=None, selectividad=None):
     if selectividad is None:
         selectividad = costos.DEFAULT_EQ_SEL

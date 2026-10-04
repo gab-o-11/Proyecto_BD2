@@ -14,10 +14,7 @@ class LockTimeoutError(LockError):
 
 class LockManager:
     def __init__(self):
-        # Un recurso puede tener varios propietarios PS y un único PU.
-        # Cada propietario conserva su propio modo para soportar PS + PU.
         self._locks = {}
-        # Se conserva este atributo para compatibilidad con el demo existente.
         self.owners = {}
         self.history = []
         self.condition = threading.Condition()

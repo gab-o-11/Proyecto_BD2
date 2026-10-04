@@ -53,8 +53,13 @@ class Parser:
             return self._advance()
         raise ParseError(
             f"Línea {self.current.line}: se esperaba {what}, "
-            f"se encontró '{self.current.lexeme}'"
+            f"se encontró {self._encontrado()}"
         )
+
+    def _encontrado(self):
+        if self.current.type == TokenType.EOF:
+            return "fin de la consulta"
+        return f"'{self.current.lexeme}'"
 
     # program -> statement { ';' statement } [ ';' ] EOF
     def parse_program(self):
@@ -98,7 +103,7 @@ class Parser:
             return EndTransaction()
         raise ParseError(
             f"Línea {self.current.line}: se esperaba SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, "
-            f"EXPLAIN, ANALYZE o BEGIN, se encontró '{self.current.lexeme}'"
+            f"EXPLAIN, ANALYZE o BEGIN, se encontró {self._encontrado()}"
         )
 
     # select -> SELECT select_list FROM table [alias] [JOIN table [alias] ON col = col] [where] [group] [order]
@@ -147,7 +152,7 @@ class Parser:
             self._expect(TokenType.BY, "BY")
             order_by = self._expression()
             if isinstance(order_by, Intersection):
-                raise ParseError("INTERSECTA solo se admite en WHERE")
+                raise ParseError(f"Línea {self.previous.line}: INTERSECTA solo se admite en WHERE")
             order_desc = self._match(TokenType.DESC)
             if not order_desc:
                 self._match(TokenType.ASC)
@@ -171,7 +176,7 @@ class Parser:
             self._expect(TokenType.COMMA, "','")
             nombre_poligono = self._column_name()
             if nombre_poligono.upper() != "POLYGON":
-                raise ParseError("INTERSECTA requiere POLYGON(POINT(...), ...)")
+                raise ParseError(f"Línea {self.previous.line}: INTERSECTA requiere POLYGON(POINT(...), ...)")
             self._expect(TokenType.LPAREN, "'('")
             vertices = [self._point()]
             while self._match(TokenType.COMMA):
@@ -209,10 +214,15 @@ class Parser:
 
     def _coordinate(self):
         if not self._match(TokenType.INT, TokenType.FLOAT):
-            raise ParseError(f"Línea {self.current.line}: se esperaba una coordenada numérica")
+            raise ParseError(
+                f"Línea {self.current.line}: se esperaba una coordenada numérica, "
+                f"se encontró {self._encontrado()}"
+            )
         value = float(self.previous.lexeme)
         if not math.isfinite(value):
-            raise ParseError(f"Línea {self.previous.line}: la coordenada debe ser finita")
+            raise ParseError(
+                f"Línea {self.previous.line}: la coordenada '{self.previous.lexeme}' debe ser finita"
+            )
         return value
 
     def _column_name(self):
@@ -369,7 +379,7 @@ class Parser:
         else:
             raise ParseError(
                 f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR, DATE o POINT), "
-                f"se encontró '{self.current.lexeme}'"
+                f"se encontró {self._encontrado()}"
             )
         primary_key, not_null = self._column_constraints()
         return ColumnDef(nombre, tipo, tam, primary_key=primary_key, not_null=not_null)
@@ -456,8 +466,8 @@ class Parser:
             return Like(columna, token.lexeme[1:-1].replace("''", "'"), negado)
 
         raise ParseError(
-            f"Línea {self.current.line}: se esperaba un símbolo de comparación, BETWEEN, IN, LIKE o IS, "
-            f"se encontró '{self.current.lexeme}'"
+            f"Línea {self.current.line}: se esperaba un operador de comparación o BETWEEN, IN, LIKE o IS, "
+            f"se encontró {self._encontrado()}"
         )
 
     # value -> INT | FLOAT | STRING | NULL | POINT
@@ -473,6 +483,6 @@ class Parser:
         if self._match(TokenType.STRING):
             return self.previous.lexeme[1:-1].replace("''", "'")
         raise ParseError(
-            f"Línea {self.current.line}: se esperaba un valor (número o cadena), "
-            f"se encontró '{self.current.lexeme}'"
+            f"Línea {self.current.line}: se esperaba un valor (número, cadena o POINT) o NULL, "
+            f"se encontró {self._encontrado()}"
         )
