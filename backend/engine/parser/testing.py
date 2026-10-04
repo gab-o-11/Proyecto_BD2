@@ -34,15 +34,56 @@ INVALIDAS = [
     "INSERT INTO t VALUES (1, 2,)",
     "UPDATE alumnos SET promedio 5",
     "UPDATE SET x = 1",
-    "CREATE TABLE t (a DATE)",
+    "CREATE TABLE t (a BLOB)",
     "CREATE TABLE t ()",
     "BEGIN;",
     "SELECT * FROM t WHERE n = 'Ana",
     "SELECT # FROM t",
 ]
 
+# Cada una debe parsear, imprimirse con PrintVisitor y volver a parsear
+# al MISMO AST. Si el visitor olvida imprimir un campo, el AST cambia.
+# Solo se parsean, no se ejecutan: no dependen del executor.
+IDA_Y_VUELTA = [
+    "SELECT COUNT(*) FROM t",
+    "SELECT ciudad, AVG(sueldo), MAX(edad) FROM t GROUP BY ciudad ORDER BY ciudad",
+    "CREATE TABLE t (id INT PRIMARY KEY NOT NULL, n VARCHAR(10), f DATE) USING BPLUS",
+    "CREATE TABLE t (a DATE)",
+    "EXPLAIN ANALYZE SELECT * FROM t WHERE id >= 3",
+    "UPDATE t SET a = 1, b = 'x'",
+    "INSERT INTO t VALUES (1, 2.5, 'hola')",
+]
+
+
+def probar_ida_y_vuelta():
+    print("=" * 60)
+    print("IDA Y VUELTA  AST -> SQL -> AST")
+    print("=" * 60)
+    correctas = 0
+    for consulta in IDA_Y_VUELTA:
+        # parse_program devuelve una lista; aquí cada consulta es UNA sentencia
+        [original] = Parser(Scanner(consulta)).parse_program()
+        texto = PrintVisitor().render([original])
+        try:
+            [reparseado] = Parser(Scanner(texto)).parse_program()
+        except (ParseError, LexicalError) as e:
+            print(f"  FALLA {consulta!r}")
+            print(f"     el texto impreso no parsea: {texto!r}")
+            print(f"     {e}")
+            continue
+        if original == reparseado:   # @dataclass compara campo por campo
+            correctas += 1
+        else:
+            print(f"  FALLA {consulta!r}")
+            print(f"     impreso:    {texto!r}")
+            print(f"     original:   {original}")
+            print(f"     reparseado: {reparseado}")
+    print(f"\n{correctas} de {len(IDA_Y_VUELTA)} pasaron la ida y vuelta\n")
+
 
 def main():
+    probar_ida_y_vuelta()
+
     try:
         ast = Parser(Scanner(CONSULTAS)).parse_program()
     except (ParseError, LexicalError) as e:
