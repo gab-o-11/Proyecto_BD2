@@ -3,7 +3,7 @@ import time
 
 from fastapi import FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from engine.catalog import create_catalog, table_info
 from engine.parser.scanner import Scanner
@@ -18,6 +18,7 @@ PROJECT_DIR = os.path.dirname(BACKEND_DIR)
 DATA_DIR = os.path.join(PROJECT_DIR, "data", "runtime")
 
 catalog = create_catalog(DATA_DIR)
+transaction_manager = TransactionManager()
 
 app = FastAPI(title="MiniGestor BD2")
 
@@ -31,6 +32,7 @@ app.add_middleware(
 
 class QueryBody(BaseModel):
     sql: str
+    parameters: dict[str, tuple[float, float]] = Field(default_factory=dict)
 
 
 def _tipo(sentencia):
@@ -87,7 +89,21 @@ def query(body: QueryBody):
     except Exception as error:
         return {"error": str(error), "plan": [], "statements": []}
 
-    executor = Executor(catalog, TransactionManager(), DATA_DIR)
+    activa = False
+    for sentencia in sentencias:
+        nombre = type(sentencia).__name__
+        if nombre == "BeginTransaction":
+            if activa:
+                return {"error": "Ya existe una transacción activa", "plan": [], "statements": []}
+            activa = True
+        elif nombre == "EndTransaction":
+            if not activa:
+                return {"error": "No existe una transacción activa", "plan": [], "statements": []}
+            activa = False
+    if activa:
+        return {"error": "BEGIN y END TRANSACTION deben enviarse en la misma consulta", "plan": [], "statements": []}
+
+    executor = Executor(catalog, transaction_manager, DATA_DIR, parameters=body.parameters)
     salidas = executor.run(sentencias)
     elapsed = round((time.monotonic() - start) * 1000, 1)
 
@@ -95,6 +111,8 @@ def query(body: QueryBody):
     for i in range(len(sentencias)):
         salida = salidas[i]
         item = {"type": _tipo(sentencias[i]), "plan": salida["plan"]}
+        if "spatial" in salida:
+            item["spatial"] = salida["spatial"]
         if "explain" in salida:
             item["explain"] = salida["explain"]
         if "error" in salida:

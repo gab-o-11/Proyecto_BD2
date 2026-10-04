@@ -112,11 +112,14 @@ def external_group_by(rows, key_fn, specs, mem_budget=1000, num_partitions=16, t
             yield key, row_out
         return
     parts = _spill(chain(buffered, rows), key_fn, num_partitions, hash_bits, tmp_dir)
-    for path in parts:
-        yield from external_group_by(
-            _read_pickles(path), key_fn, specs, mem_budget, num_partitions, tmp_dir, hash_bits + 4
-        )
-        os.remove(path)
+    try:
+        for path in parts:
+            yield from external_group_by(
+                _read_pickles(path), key_fn, specs, mem_budget, num_partitions, tmp_dir, hash_bits + 4
+            )
+    finally:
+        for path in parts:
+            os.remove(path)
 
 
 def _distinct_within(path, key_fn, limit):
@@ -144,14 +147,17 @@ def _join_partition(left_path, right_path, left_key, right_key):
 
 def grace_hash_join(left, right, left_key, right_key, mem_budget=1000, num_partitions=16, tmp_dir=None, hash_bits=0):
     left_parts = _spill(left, left_key, num_partitions, hash_bits, tmp_dir)
-    right_parts = _spill(right, right_key, num_partitions, hash_bits, tmp_dir)
-    for left_path, right_path in zip(left_parts, right_parts):
-        if hash_bits >= MAX_HASH_BITS or _distinct_within(left_path, left_key, mem_budget):
-            yield from _join_partition(left_path, right_path, left_key, right_key)
-        else:
-            yield from grace_hash_join(
-                _read_pickles(left_path), _read_pickles(right_path),
-                left_key, right_key, mem_budget, num_partitions, tmp_dir, hash_bits + 4,
-            )
-        os.remove(left_path)
-        os.remove(right_path)
+    right_parts = []
+    try:
+        right_parts = _spill(right, right_key, num_partitions, hash_bits, tmp_dir)
+        for left_path, right_path in zip(left_parts, right_parts):
+            if hash_bits >= MAX_HASH_BITS or _distinct_within(left_path, left_key, mem_budget):
+                yield from _join_partition(left_path, right_path, left_key, right_key)
+            else:
+                yield from grace_hash_join(
+                    _read_pickles(left_path), _read_pickles(right_path),
+                    left_key, right_key, mem_budget, num_partitions, tmp_dir, hash_bits + 4,
+                )
+    finally:
+        for path in left_parts + right_parts:
+            os.remove(path)
