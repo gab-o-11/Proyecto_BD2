@@ -1,8 +1,9 @@
 import operator
+import time
 from .visitor import Visitor
 from ..catalog import StorageTable
 from ..transactions import Resource, TransactionError, TransactionManager
-from ..plan import base_de, planner
+from ..plan import base_de, planner, reporte
 from ..plan.costos import Perfil
 from datetime import date
 
@@ -78,6 +79,8 @@ class Executor(Visitor):
             else:
                 salida["columns"] = resultado["columns"]
                 salida["rows"] = resultado["rows"]
+            if resultado is not None and "explain" in resultado:
+                salida["explain"] = resultado["explain"]
             salidas.append(salida)
         return salidas
 
@@ -122,6 +125,7 @@ class Executor(Visitor):
     def visit_Insert(self, node):
         raiz = self._plan_insert(node)
         self._ejecutar(raiz)
+        self._mantener(raiz.tabla)
         return {"message": f"1 fila insertada en '{raiz.tabla.name}'"}
 
     def _plan_delete(self, node):
@@ -133,6 +137,7 @@ class Executor(Visitor):
     def visit_Delete(self, node):
         raiz = self._plan_delete(node)
         self._ejecutar(raiz)
+        self._mantener(raiz.tabla)
         return {"message": f"{raiz.afectadas} fila(s) eliminada(s) de '{raiz.tabla.name}'"}
 
     def _plan_select(self, node):
@@ -171,6 +176,52 @@ class Executor(Visitor):
         filas = list(raiz.iterar())
         self.plan.extend(raiz.traza())
         return filas
+
+    def _mantener(self, tabla):
+        autoanalyze = getattr(tabla, "autoanalyze", None)
+        if autoanalyze is not None:
+            autoanalyze()
+
+    def _planificar(self, sentencia):
+        nombre = type(sentencia).__name__
+        if nombre == "Select":
+            raiz, columnas, tabla = self._plan_select(sentencia)
+            return raiz
+        if nombre == "Insert":
+            return self._plan_insert(sentencia)
+        if nombre == "Delete":
+            return self._plan_delete(sentencia)
+        if nombre == "Update":
+            return self._plan_update(sentencia)
+        raise SemanticError("EXPLAIN solo admite SELECT, INSERT, UPDATE o DELETE")
+
+    def visit_Explain(self, node):
+        inicio = time.perf_counter()
+        raiz = self._planificar(node.statement)
+        planificacion = time.perf_counter() - inicio
+        ejecucion = 0.0
+        if node.analyze:
+            inicio = time.perf_counter()
+            for _ in raiz.iterar():
+                pass
+            ejecucion = time.perf_counter() - inicio
+            self.plan.extend(raiz.traza())
+            if hasattr(raiz, "afectadas"):
+                self._mantener(raiz.tabla)
+        explain = reporte(raiz, node.analyze, planificacion, ejecucion)
+        filas = []
+        for linea in explain["text"]:
+            filas.append({"QUERY PLAN": linea})
+        return {"columns": ["QUERY PLAN"], "rows": filas, "explain": explain}
+
+    def visit_Analyze(self, node):
+        tabla = self._tabla(node.table)
+        self._bloquear_tabla(tabla)
+        if not hasattr(tabla, "analyze"):
+            return {"message": f"ANALYZE {tabla.name}: tabla en memoria, sin estadísticas"}
+        estadisticas = tabla.analyze()
+        self.plan.append(self._paso("Analyze", base_de(tabla), tabla.name, estadisticas["filas"]))
+        return {"message": f"ANALYZE {tabla.name}: {estadisticas['filas']} filas, {len(estadisticas['columnas'])} columnas"}
 
     def _agg_specs(self, tabla, node):
         specs = []
@@ -284,6 +335,7 @@ class Executor(Visitor):
     def visit_Update(self, node):
         raiz = self._plan_update(node)
         self._ejecutar(raiz)
+        self._mantener(raiz.tabla)
         return {"message": f"{raiz.afectadas} fila(s) actualizada(s) en '{raiz.tabla.name}'"}
 
     def visit_ColumnDef(self, node):
