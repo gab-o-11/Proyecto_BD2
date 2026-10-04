@@ -157,7 +157,7 @@ def main():
         response = api.query(api.QueryBody(sql="SELECT * FROM tiendas ORDER BY distancia(ubicacion, mi_ubicacion) LIMIT 1", parameters={"mi_ubicacion": [-12.0464, -77.0428]}))
         assert response["rows"][0]["ubicacion"] == (-12.0464, -77.0428)
         assert response["statements"][0]["spatial"][0]["points"] == [(-12.0464, -77.0428)]
-        assert api.tables()[0]["indexes"][-1] == {"field": "ubicacion", "type": "RTREE"}
+        assert {k: api.tables()[0]["indexes"][-1][k] for k in ("field", "type")} == {"field": "ubicacion", "type": "RTREE"}
         assert json.loads(json.dumps(response))["rows"][0]["ubicacion"] == [-12.0464, -77.0428]
         response = api.query(api.QueryBody(sql="SELECT * FROM tiendas ORDER BY distancia(ubicacion, mi_ubicacion)", parameters={"mi_ubicacion": [float("nan"), 0]}))
         assert "error" in response

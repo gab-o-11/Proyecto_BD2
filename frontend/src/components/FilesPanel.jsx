@@ -19,8 +19,8 @@ function TableItem({ table }) {
           ))}
           <div className="idx-title">Índices</div>
           {table.indexes.map((ix) => (
-            <div key={ix.field} className="idx-row">
-              <span className="kind">{ix.type}</span> · {ix.field}
+            <div key={ix.name || ix.type + ix.field} className="idx-row" title={ix.name}>
+              <span className="kind">{ix.type}</span> · {ix.field}{ix.primary === false && ix.type !== 'RTREE' && <span className="muted"> · {ix.name}</span>}
             </div>
           ))}
         </div>

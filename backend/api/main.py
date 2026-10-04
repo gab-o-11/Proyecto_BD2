@@ -47,6 +47,12 @@ def _tipo(sentencia):
         return "update"
     if nombre == "CreateTable":
         return "create"
+    if nombre == "CreateIndex":
+        return "create_index"
+    if nombre == "DropTable":
+        return "drop"
+    if nombre == "DropIndex":
+        return "drop_index"
     if nombre == "BeginTransaction":
         return "begin"
     if nombre == "EndTransaction":
@@ -161,16 +167,16 @@ def query(body: QueryBody):
 def _recorrido(paginas):
     indices = {}
     for nombre in catalog:
-        for ruta, (columna, tipo) in catalog[nombre].archivos_de_indices().items():
-            indices[ruta] = (nombre, columna, tipo)
+        for ruta, (columna, tipo, indice) in catalog[nombre].archivos_de_indices().items():
+            indices[ruta] = (nombre, columna, tipo, indice)
     agrupado = {}
     for ruta, pagina in paginas:
         if ruta not in indices:
             continue
         agrupado.setdefault(indices[ruta], []).append(pagina)
     salida = []
-    for (tabla, columna, tipo), visitadas in agrupado.items():
-        salida.append({"tabla": tabla, "columna": columna, "tipo": tipo, "paginas": sorted(visitadas)})
+    for (tabla, columna, tipo, indice), visitadas in agrupado.items():
+        salida.append({"tabla": tabla, "columna": columna, "tipo": tipo, "indice": indice, "paginas": sorted(visitadas)})
     return salida
 
 
@@ -189,9 +195,9 @@ def _leer_indice(nombre, accion):
 
 
 @app.get("/api/tables/{nombre}/index")
-def describir_indice(nombre: str, column: str, page: int | None = None, depth: int = 1):
+def describir_indice(nombre: str, column: str, page: int | None = None, depth: int = 1, index: str | None = None):
     profundidad = max(0, min(depth, 3))
-    return _leer_indice(nombre, lambda tabla: tabla.describir_indice(column, page, profundidad))
+    return _leer_indice(nombre, lambda tabla: tabla.describir_indice(column, page, profundidad, index))
 
 
 @app.get("/api/tables/{nombre}/index/rects")
@@ -228,6 +234,9 @@ async def import_table(
             raise CSVImportError(f"la columna índice '{index_field}' no existe")
         if dict(schema)[index_field] == "point":
             raise CSVImportError("la columna índice no puede ser POINT; el R-Tree se crea solo para cada columna POINT")
+        vacia = next((numero for numero, row in enumerate(rows, start=2) if row[index_field] is None), None)
+        if vacia is not None:
+            raise CSVImportError(f"fila {vacia}: la columna índice '{index_field}' no puede estar vacía")
         table = StorageTable(table_name, schema, DATA_DIR, index_field, index_kind)
         table.bulk_insert(rows)
         catalog[table_name] = table

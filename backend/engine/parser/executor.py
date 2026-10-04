@@ -1,15 +1,16 @@
 import operator
 import math
+import re
 import struct
 import time
 from .visitor import PrintVisitor, Visitor
-from .nodes import Compare, Distance, Point, Intersection, aggregate_name, expression_columns, Between
-from ..catalog import StorageTable
+from .nodes import And, Between, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, aggregate_name, condition_columns, expression_columns
+from ..catalog import StorageTable, nombres_de_indices
 from ..transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
-from ..plan import base_de, planner, reporte
+from ..plan import Predicado, Rango, base_de, planner, reporte
 from ..plan import costos
 from ..plan.costos import Perfil
-from ..plan.nodos import Calificar
+from ..plan.nodos import COMPARADORES, Calificar, IndexScan, SpatialIndexScan
 from ..spatial import distance, point
 from ..spatial_table import SpatialTable
 from ..rtree import contains_point, validate_polygon
@@ -19,6 +20,52 @@ from datetime import date
 
 class SemanticError(Exception):
     pass
+
+
+def _y(funciones, fila):
+    resultado = True
+    for funcion in funciones:
+        valor = funcion(fila)
+        if valor is False:
+            return False
+        if valor is None:
+            resultado = None
+    return resultado
+
+
+def _o(funciones, fila):
+    resultado = False
+    for funcion in funciones:
+        valor = funcion(fila)
+        if valor is True:
+            return True
+        if valor is None:
+            resultado = None
+    return resultado
+
+
+def _con_nulos(tabla, columna, rids, limite=None):
+    entregados = 0
+    for rid in rids:
+        entregados += 1
+        yield rid
+    if limite is not None and entregados >= limite:
+        return
+    for fila in tabla.scan():
+        if fila[columna] is None:
+            yield tabla.spatial_id(fila)
+
+
+def _patron_like(patron):
+    partes = []
+    for caracter in patron:
+        if caracter == "%":
+            partes.append(".*")
+        elif caracter == "_":
+            partes.append(".")
+        else:
+            partes.append(re.escape(caracter))
+    return re.compile("".join(partes), re.DOTALL)
 
 MEM_BUDGET = 32
 
@@ -144,15 +191,23 @@ class Executor(Visitor):
     def _plan_insert(self, node):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla, LockMode.PX)
-        if len(node.values) != len(tabla.columns):
-            raise SemanticError(
-                f"'{tabla.name}' tiene {len(tabla.columns)} columnas "
-                f"y se dieron {len(node.values)} valores"
-            )
-        fila = dict(zip(tabla.columns, node.values))
-        fila = self._validar_fila(tabla, fila)
-        self._validar_claves(tabla, [fila])
-        hijo = planner.resultado(fila, Perfil(tabla).ancho)
+        columnas = list(tabla.columns)
+        if node.columns is not None:
+            columnas = [self._columna(tabla, c) for c in node.columns]
+            if len(columnas) != len(set(columnas)):
+                raise SemanticError("hay columnas repetidas en INSERT")
+        filas = []
+        for valores in node.all_values():
+            if len(valores) != len(columnas):
+                raise SemanticError(
+                    f"se esperaban {len(columnas)} valores "
+                    f"({', '.join(columnas)}) y se dieron {len(valores)}"
+                )
+            fila = {c: None for c in tabla.columns}
+            fila.update(zip(columnas, valores))
+            filas.append(self._validar_fila(tabla, fila))
+        self._validar_claves(tabla, filas)
+        hijo = planner.resultado(filas, Perfil(tabla).ancho)
 
         def aplicar(filas):
             for f in filas:
@@ -165,7 +220,9 @@ class Executor(Visitor):
         raiz = self._plan_insert(node)
         self._ejecutar(raiz)
         self._mantener(raiz.tabla)
-        return {"message": f"1 fila insertada en '{raiz.tabla.name}'"}
+        if raiz.afectadas == 1:
+            return {"message": f"1 fila insertada en '{raiz.tabla.name}'"}
+        return {"message": f"{raiz.afectadas} filas insertadas en '{raiz.tabla.name}'"}
 
     def _plan_delete(self, node):
         tabla = self._tabla(node.table)
@@ -223,10 +280,10 @@ class Executor(Visitor):
                     target = self._objetivo_espacial(actual, expresion)
                     if target is not None and node.where is None:
                         columna, centro, metrica = target
-                        indice = self._indice_espacial(actual, columna, "knn", lambda tree: tree.knn(centro, node.limit, metrica), texto, node.limit)
+                        indice = self._indice_espacial(actual, columna, "knn", lambda tree: _con_nulos(actual, columna, tree.knn(centro, node.limit, metrica), node.limit), texto, node.limit)
                         if tabla is not actual:
                             indice = Calificar(indice, node.table_alias or node.table, actual.columns)
-                    elif target is not None and tabla is actual and not isinstance(node.where, Between):
+                    elif target is not None and tabla is actual:
                         indice = self._knn_filtrado(actual, target, texto, node.where, node.limit, raiz, key_fn)
                 raiz = indice if indice is not None else planner.ordenar(raiz, texto, MEM_BUDGET, node.order_desc, key_fn)
             else:
@@ -242,15 +299,14 @@ class Executor(Visitor):
         return raiz, columnas, tabla
 
     def _fuente_select(self, node):
-        if isinstance(node.where, Between):
-            return self._fuente_rango(node)
         izquierda = self._tabla(node.table)
         derecha = None if node.join is None else self._tabla(node.join.table)
         for tabla in sorted([izquierda] + ([] if derecha is None else [derecha]), key=lambda t: t.name):
             self._bloquear_tabla(tabla, LockMode.PS)
         referencias = list(node.columns or []) + [arg for _, arg in node.aggregates or [] if arg is not None]
-        for expresion in (node.group_by, node.order_by, None if node.where is None else node.where.column):
+        for expresion in (node.group_by, node.order_by):
             referencias.extend(expression_columns(expresion))
+        referencias.extend(condition_columns(node.where))
         if derecha is None and node.table_alias is None and not any("." in c for c in referencias):
             return self._acceso(izquierda, node.where), izquierda
 
@@ -270,21 +326,18 @@ class Executor(Visitor):
                 if c in fuente.column_aliases:
                     fuente.ambiguous_columns.add(c)
                 fuente.column_aliases[c] = prefijo + "." + c
+        if derecha is None:
+            prefijo = lados[0][1]
+            simple = self._mapear_condicion(node.where, lambda c: self._columna(fuente, c).split(".", 1)[1], lambda e: self._sin_alias(e, prefijo))
+            raiz = Calificar(self._acceso(izquierda, simple), prefijo, izquierda.columns)
+            return raiz, fuente
+
         condicion = None
         espacial = self._es_espacial(node.where)
-        if node.where is not None and not espacial:
+        compuesta = node.where is not None and not espacial and not isinstance(node.where, Compare)
+        if node.where is not None and not espacial and not compuesta:
             columna = self._columna(fuente, node.where.column)
-            condicion = Compare(columna, node.where.op, self._convertir(fuente, columna, node.where.value))
-        if derecha is None:
-            simple = None if condicion is None else Compare(condicion.column.split(".", 1)[1], condicion.op, condicion.value)
-            if espacial:
-                self._filtro_espacial(planner.acceso(izquierda, None), fuente, node.where)
-                if isinstance(node.where, Intersection):
-                    simple = replace(node.where, column=self._columna(fuente, node.where.column).split(".", 1)[1])
-                else:
-                    simple = replace(node.where, column=self._sin_alias(node.where.column, lados[0][1]))
-            raiz = Calificar(self._acceso(izquierda, simple), lados[0][1], izquierda.columns)
-            return raiz, fuente
+            condicion = Compare(columna, node.where.op, self._valor_comparable(fuente, columna, node.where.value))
 
         clave_izq = self._columna(fuente, node.join.left_column)
         clave_der = self._columna(fuente, node.join.right_column)
@@ -305,17 +358,21 @@ class Executor(Visitor):
             raiz = planner.filtrar(raiz, condicion)
         elif espacial:
             raiz = self._filtro_espacial(raiz, fuente, node.where)
+        elif compuesta:
+            predicado, seleccion = self._predicado(fuente, node.where)
+            raiz = planner.filtrar(raiz, predicado, selectividad=seleccion)
         return raiz, fuente
 
-    def _fuente_rango(self, node):
-        rango = node.where
-        if isinstance(rango.column, Distance):
-            raise SemanticError("BETWEEN con distancia aún no está soportado")
-        inferior = replace(node, where=Compare(rango.column, ">=", rango.low))
-        raiz, fuente = self._fuente_select(inferior)
-        columna = self._columna(fuente, rango.column)
-        alto = Compare(columna, "<=", self._convertir(fuente, columna, rango.high))
-        return planner.filtrar(raiz, alto), fuente
+    def _mapear_condicion(self, condicion, columna, distancia):
+        if condicion is None:
+            return None
+        if isinstance(condicion, (And, Or)):
+            return type(condicion)(tuple(self._mapear_condicion(c, columna, distancia) for c in condicion.conditions))
+        if isinstance(condicion, Not):
+            return Not(self._mapear_condicion(condicion.condition, columna, distancia))
+        if isinstance(condicion.column, Distance):
+            return replace(condicion, column=distancia(condicion.column))
+        return replace(condicion, column=columna(condicion.column))
 
     def visit_Select(self, node):
         raiz, columnas, tabla = self._plan_select(node)
@@ -394,7 +451,7 @@ class Executor(Visitor):
             if arg is not None:
                 columna = self._columna(tabla, arg)
             if func == "count":
-                specs.append(("count", None))
+                specs.append(("count", None if columna is None else operator.itemgetter(columna)))
                 nombres.append(aggregate_name(func, arg))
                 continue
             if arg is None:
@@ -408,26 +465,172 @@ class Executor(Visitor):
         return specs, nombres
 
     def _acceso(self, tabla, where):
-        if isinstance(where, Between):
-            return self._acceso_rango(tabla, where)
+        if where is None:
+            return planner.acceso(tabla, None)
         if self._es_espacial(where):
-            seleccion = self._selectividad_espacial(tabla, where)
-            fallback = self._filtro_espacial(planner.acceso(tabla, None), tabla, where, seleccion)
-            filas = Perfil(tabla).filas * (costos.DEFAULT_SPATIAL_SEL if seleccion is None else seleccion)
-            if isinstance(where, Intersection):
-                column = where.column.removeprefix(tabla.name + ".")
-                vertices = self._vertices(where)
-                extra = costos.CPU_OPERATOR_COST * len(vertices)
-                return self._indice_espacial(tabla, column, "polygon", lambda tree: tree.search_polygon(vertices), PrintVisitor().visit_Intersection(where), filas, extra)
-            target = self._objetivo_espacial(tabla, where.column)
-            if target is not None and where.op in ("<", "<=", "="):
-                column, center, metric = target
-                radius = float(where.value)
-                if radius >= 0:
-                    root = self._indice_espacial(tabla, column, "radius", lambda tree: tree.search_radius(center, radius, metric, inclusive=where.op != "<"), PrintVisitor().visit_Compare(where), filas)
-                    return self._filtro_espacial(root, tabla, where, costos.DEFAULT_EQ_SEL) if where.op == "=" else root
-            return fallback
-        return planner.acceso(tabla, self._condicion_simple(tabla, where))
+            return self._acceso_espacial(tabla, where)
+        if isinstance(where, Compare):
+            simple = self._condicion_simple(tabla, where)
+            principal = planner.acceso(tabla, simple)
+            opciones = [o for o in [principal] + self._opciones_secundarias(tabla, simple) if isinstance(o, IndexScan)]
+            return min(opciones, key=lambda o: o.costo_total) if opciones else principal
+        partes = list(where.conditions) if isinstance(where, And) else [where]
+        mejor, usada = None, None
+        for parte in partes:
+            for opcion in self._opciones_indice(tabla, parte):
+                if mejor is None or opcion.costo_total < mejor.costo_total:
+                    mejor, usada = opcion, parte
+        if mejor is None:
+            predicado, seleccion = self._predicado(tabla, where)
+            return planner.escanear(tabla, predicado, seleccion)
+        resto = [p for p in partes if p is not usada]
+        if not resto:
+            return mejor
+        predicado, seleccion = self._predicado(tabla, resto[0] if len(resto) == 1 else And(tuple(resto)))
+        return planner.filtrar(mejor, predicado, selectividad=seleccion)
+
+    def _opciones_secundarias(self, tabla, condicion):
+        opciones = []
+        for indice in getattr(tabla, "secundarios", {}).values():
+            opcion = planner.acceso_indice(tabla, condicion, indice)
+            if opcion is not None:
+                opciones.append(opcion)
+        return opciones
+
+    def _opciones_indice(self, tabla, condicion):
+        if self._es_espacial(condicion):
+            opcion = self._acceso_espacial(tabla, condicion)
+            usa_indice = isinstance(opcion, SpatialIndexScan) or any(isinstance(h, SpatialIndexScan) for h in opcion.hijos)
+            return [opcion] if usa_indice else []
+        if isinstance(condicion, Compare):
+            simple = self._condicion_simple(tabla, condicion)
+            opciones = self._opciones_secundarias(tabla, simple)
+            principal = planner.acceso_indice(tabla, simple)
+            return opciones + ([principal] if principal is not None else [])
+        if isinstance(condicion, Between) and not condicion.negated and isinstance(condicion.column, str):
+            columna = self._columna(tabla, self._sin_tabla(tabla, condicion.column))
+            bajo = self._valor_comparable(tabla, columna, condicion.low)
+            alto = self._valor_comparable(tabla, columna, condicion.high)
+            rango = Rango(columna, bajo, alto)
+            opciones = self._opciones_secundarias(tabla, rango)
+            principal = planner.acceso_indice(tabla, rango)
+            return opciones + ([principal] if principal is not None else [])
+        return []
+
+    def _acceso_espacial(self, tabla, where):
+        seleccion = self._selectividad_espacial(tabla, where)
+        fallback = self._filtro_espacial(planner.acceso(tabla, None), tabla, where, seleccion)
+        filas = Perfil(tabla).filas * (costos.DEFAULT_SPATIAL_SEL if seleccion is None else seleccion)
+        if isinstance(where, Intersection):
+            column = where.column.removeprefix(tabla.name + ".")
+            vertices = self._vertices(where)
+            extra = costos.CPU_OPERATOR_COST * len(vertices)
+            return self._indice_espacial(tabla, column, "polygon", lambda tree: tree.search_polygon(vertices), PrintVisitor().visit_Intersection(where), filas, extra)
+        target = self._objetivo_espacial(tabla, where.column)
+        if target is not None and where.op in ("<", "<=", "="):
+            column, center, metric = target
+            radius = float(where.value)
+            if radius >= 0:
+                root = self._indice_espacial(tabla, column, "radius", lambda tree: tree.search_radius(center, radius, metric, inclusive=where.op != "<"), PrintVisitor().visit_Compare(where), filas)
+                return self._filtro_espacial(root, tabla, where, costos.DEFAULT_EQ_SEL) if where.op == "=" else root
+        return fallback
+
+    @staticmethod
+    def _sin_tabla(tabla, columna):
+        if columna.startswith(tabla.name + "."):
+            return columna.split(".", 1)[1]
+        return columna
+
+    def _valor_comparable(self, tabla, columna, valor):
+        if valor is None:
+            raise SemanticError("una comparación con NULL nunca es verdadera; usa IS NULL o IS NOT NULL")
+        return self._convertir(tabla, columna, valor)
+
+    def _expresion_condicion(self, tabla, expresion):
+        if isinstance(expresion, Distance):
+            return self._distancia(tabla, expresion), "float", None
+        columna = self._columna(tabla, self._sin_tabla(tabla, expresion))
+        return operator.itemgetter(columna), self._tipo_columna(tabla, columna), columna
+
+    def _predicado(self, tabla, condicion):
+        evaluar, seleccion = self._compilar(tabla, condicion)
+        texto = condicion.accept(PrintVisitor())
+        return Predicado(evaluar, texto), min(1.0, max(0.0, seleccion))
+
+    def _compilar(self, tabla, condicion):
+        if isinstance(condicion, (And, Or)):
+            partes = [self._compilar(tabla, c) for c in condicion.conditions]
+            funciones = [f for f, _ in partes]
+            if isinstance(condicion, And):
+                seleccion = math.prod(s for _, s in partes)
+                return (lambda fila: _y(funciones, fila)), seleccion
+            seleccion = 1.0 - math.prod(1.0 - s for _, s in partes)
+            return (lambda fila: _o(funciones, fila)), seleccion
+        if isinstance(condicion, Not):
+            interna, seleccion = self._compilar(tabla, condicion.condition)
+            return (lambda fila: None if (valor := interna(fila)) is None else not valor), 1.0 - seleccion
+        perfil = Perfil(tabla)
+        if isinstance(condicion, Intersection):
+            filtro = self._filtro_espacial(planner.acceso(tabla, None), tabla, condicion)
+            columna = filtro.condicion.column
+            contiene = filtro.key_fn
+            seleccion = self._selectividad_espacial(tabla, condicion) if hasattr(tabla, "filas_totales") else None
+            return (lambda fila: None if fila[columna] is None else contiene(fila)), costos.DEFAULT_SPATIAL_SEL if seleccion is None else seleccion
+        extraer, tipo, columna = self._expresion_condicion(tabla, condicion.column)
+        if isinstance(condicion, IsNull):
+            fraccion = perfil.fraccion_nula(columna) if columna else costos.DEFAULT_EQ_SEL
+            negado = condicion.negated
+            return (lambda fila: (extraer(fila) is None) != negado), (1.0 - fraccion if negado else fraccion)
+        if isinstance(condicion, Like):
+            if tipo != "str":
+                raise SemanticError(f"LIKE requiere una columna de texto y '{columna}' no lo es")
+            patron = _patron_like(condicion.pattern)
+            negado = condicion.negated
+            return (lambda fila: None if (valor := extraer(fila)) is None else bool(patron.fullmatch(valor)) != negado), (1.0 - costos.DEFAULT_MATCH_SEL if negado else costos.DEFAULT_MATCH_SEL)
+        convertir = self._conversor(tabla, columna, condicion)
+        if isinstance(condicion, Compare):
+            valor = convertir(condicion.value)
+            comparar = COMPARADORES[condicion.op]
+            if columna is None:
+                seleccion = self._selectividad_espacial(tabla, condicion) if hasattr(tabla, "filas_totales") else None
+                seleccion = costos.DEFAULT_SPATIAL_SEL if seleccion is None else seleccion
+            else:
+                seleccion = perfil.selectividad(Compare(columna, condicion.op, valor))
+            return (lambda fila: None if (actual := extraer(fila)) is None else comparar(actual, valor)), seleccion
+        if isinstance(condicion, Between):
+            bajo, alto = convertir(condicion.low), convertir(condicion.high)
+            negado = condicion.negated
+            seleccion = perfil.selectividad_rango(columna, bajo, alto) if columna else costos.DEFAULT_RANGE_SEL
+            return (lambda fila: None if (actual := extraer(fila)) is None else (bajo <= actual <= alto) != negado), (1.0 - seleccion if negado else seleccion)
+        valores = [convertir(v) for v in condicion.values if v is not None]
+        hay_nulo = any(v is None for v in condicion.values)
+        negado = condicion.negated
+        seleccion = min(1.0, len(set(valores)) * (perfil.selectividad(Compare(columna, "=", valores[0])) if columna and valores else costos.DEFAULT_EQ_SEL))
+
+        def pertenece(fila):
+            actual = extraer(fila)
+            if actual is None:
+                return None
+            if actual in valores:
+                return not negado
+            return None if hay_nulo else negado
+        return pertenece, (1.0 - seleccion if negado else seleccion)
+
+    def _conversor(self, tabla, columna, condicion):
+        if columna is not None:
+            return lambda valor: self._valor_comparable(tabla, columna, valor)
+
+        def numero(valor):
+            if valor is None:
+                raise SemanticError("una comparación con NULL nunca es verdadera; usa IS NULL o IS NOT NULL")
+            try:
+                valido = isinstance(valor, (int, float)) and math.isfinite(valor)
+            except OverflowError:
+                valido = False
+            if not valido:
+                raise SemanticError("la distancia debe compararse con un número finito")
+            return valor
+        return numero
 
     def _condicion_simple(self, tabla, where):
         if where is None:
@@ -436,14 +639,7 @@ class Executor(Visitor):
         if columna.startswith(tabla.name + "."):
             columna = columna.split(".", 1)[1]
         columna = self._columna(tabla, columna)
-        return Compare(columna, where.op, self._convertir(tabla, columna, where.value))
-
-    def _acceso_rango(self, tabla, where):
-        if isinstance(where.column, Distance):
-            raise SemanticError("BETWEEN con distancia aún no está soportado")
-        bajo = self._condicion_simple(tabla, Compare(where.column, ">=", where.low))
-        alto = self._condicion_simple(tabla, Compare(where.column, "<=", where.high))
-        return planner.filtrar(planner.acceso(tabla, bajo), alto)
+        return Compare(columna, where.op, self._valor_comparable(tabla, columna, where.value))
 
     def _selectividad_espacial(self, tabla, where):
         perfil = Perfil(tabla)
@@ -474,12 +670,14 @@ class Executor(Visitor):
             seleccion = self._selectividad_espacial(tabla, where)
             if seleccion is None:
                 seleccion = costos.DEFAULT_SPATIAL_SEL
-        else:
+        elif isinstance(where, Compare):
             condicion = self._condicion_simple(tabla, where)
             seleccion = Perfil(tabla).selectividad(condicion)
+        else:
+            condicion, seleccion = self._predicado(tabla, where)
         total = max(Perfil(tabla).filas, 1)
         necesarias = min(total, math.ceil(limite / max(seleccion, 1.0 / total)))
-        escaneo = self._indice_espacial(tabla, columna, "knn-incremental", lambda tree: tree.knn_iter(centro, metrica), texto, necesarias)
+        escaneo = self._indice_espacial(tabla, columna, "knn-incremental", lambda tree: _con_nulos(tabla, columna, tree.knn_iter(centro, metrica)), texto, necesarias)
         if self._es_espacial(where):
             incremental = self._filtro_espacial(escaneo, tabla, where, seleccion)
         else:
@@ -518,8 +716,11 @@ class Executor(Visitor):
         izquierda, derecha = operando(expresion.left), operando(expresion.right)
 
         def evaluar(fila):
+            a, b = izquierda(fila), derecha(fila)
+            if a is None or b is None:
+                return None
             try:
-                return distance(izquierda(fila), derecha(fila), expresion.metric)
+                return distance(a, b, expresion.metric)
             except ValueError as error:
                 raise SemanticError(str(error)) from error
 
@@ -527,7 +728,7 @@ class Executor(Visitor):
 
     @staticmethod
     def _es_espacial(condicion):
-        return isinstance(condicion, Intersection) or (condicion is not None and isinstance(condicion.column, Distance))
+        return isinstance(condicion, Intersection) or (isinstance(condicion, Compare) and isinstance(condicion.column, Distance))
 
     @staticmethod
     def _sin_alias(expresion, prefijo):
@@ -566,7 +767,7 @@ class Executor(Visitor):
             if self._tipo_columna(tabla, column) != "point":
                 raise SemanticError("INTERSECTA requiere una columna POINT")
             vertices = self._vertices(condicion)
-            filtro = planner.filtrar(raiz, Compare(column, "=", True), lambda row: contains_point(vertices, row[column]), PrintVisitor().visit_Intersection(condicion), selectividad)
+            filtro = planner.filtrar(raiz, Compare(column, "=", True), lambda row: row[column] is not None and contains_point(vertices, row[column]), PrintVisitor().visit_Intersection(condicion), selectividad)
             filtro.method = "sequential-polygon"
             return filtro
         try:
@@ -632,6 +833,12 @@ class Executor(Visitor):
             definition = tabla.column_definitions.get(columna, {})
             if valor is None and (definition.get("not_null") or definition.get("primary_key")):
                 raise SemanticError(f"la columna '{columna}' no admite NULL")
+            if valor is None:
+                if isinstance(tabla, StorageTable) and columna == tabla.index_field:
+                    raise SemanticError(f"la columna '{columna}' tiene el índice principal de '{tabla.name}' y no admite NULL")
+                if isinstance(tabla, StorageTable) and not tabla.nulos:
+                    raise SemanticError(f"la tabla '{tabla.name}' se creó sin soporte para NULL")
+                continue
             valor = self._convertir(tabla, columna, valor)
             tipo = tabla.column_types.get(columna)
             if tipo == "DATE":
@@ -703,11 +910,7 @@ class Executor(Visitor):
             raise SemanticError(str(error)) from error
 
     def visit_CreateTable(self, node):
-        try:
-            self.transaction_manager.acquire(Resource("catalog", "tables"), LockMode.PX)
-            self.transaction_manager.acquire(Resource("table", node.table), LockMode.PX)
-        except (LockError, TransactionError) as error:
-            raise SemanticError(str(error)) from error
+        self._bloquear_catalogo(node.table)
         if node.table in self.catalog:
             raise SemanticError(f"la tabla '{node.table}' ya existe")
         nombres = [c.name for c in node.columns]
@@ -748,12 +951,72 @@ class Executor(Visitor):
         if tipo is None:
             tipo = "HASH"
         formato = "".join("i" if c.type == "INT" else "f" if c.type == "FLOAT" else "dd" if c.type == "POINT" else str(c.size * 4 if c.size is not None else 32) + "s" for c in node.columns)
-        if struct.calcsize(formato + "ii") > 4080:
+        if struct.calcsize(formato + "Qii") > 4080:
             raise SemanticError("el registro es demasiado grande para una página de 4096 bytes")
         tabla = StorageTable(node.table, schema, self.data_dir, campo, tipo, definitions)
         self.catalog[node.table] = tabla
         self.plan.append(self._paso("Create Table", base_de(tabla), node.table, 0))
         return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
+
+    def _bloquear_catalogo(self, nombre):
+        try:
+            self.transaction_manager.acquire(Resource("catalog", "tables"), LockMode.PX)
+            self.transaction_manager.acquire(Resource("table", nombre), LockMode.PX)
+        except (LockError, TransactionError) as error:
+            raise SemanticError(str(error)) from error
+
+    def visit_CreateIndex(self, node):
+        self._bloquear_catalogo(node.table)
+        tabla = self._tabla(node.table)
+        if not isinstance(tabla, StorageTable):
+            raise SemanticError("los índices secundarios solo existen en tablas guardadas en disco")
+        columna = self._columna(tabla, node.column)
+        if self._tipo_columna(tabla, columna) == "point":
+            raise SemanticError(f"la columna POINT '{columna}' ya tiene su R-Tree; CREATE INDEX admite HASH o BPLUS")
+        tipo = node.kind or "BPLUS"
+        existentes = nombres_de_indices(self.catalog)
+        if node.name in existentes:
+            raise SemanticError(f"ya existe un índice llamado '{node.name}' (en '{existentes[node.name]}')")
+        principal = str(tabla.index_kind)
+        if columna == tabla.index_field and (principal == tipo or (tipo == "BPLUS" and principal == "BPLUS_CLUSTERED")):
+            raise SemanticError(f"'{columna}' ya tiene el índice principal {tabla.nombre_indice_principal()} ({principal})")
+        for indice in tabla.secundarios.values():
+            if indice.columna == columna and indice.tipo == tipo:
+                raise SemanticError(f"'{columna}' ya tiene el índice {tipo} '{indice.nombre}'")
+        try:
+            indice = tabla.crear_indice(node.name, columna, tipo)
+        except ValueError as error:
+            raise SemanticError(str(error)) from error
+        filas = sum(1 for fila in tabla.scan() if fila[columna] is not None)
+        descripcion = "B+ no agrupado" if tipo == "BPLUS" else "hash extensible"
+        self.plan.append(self._paso("Create Index", tipo + "(" + columna + ")", node.name, filas))
+        return {"message": f"índice '{indice.nombre}' creado sobre {tabla.name}.{columna} ({descripcion}, {filas} entradas)"}
+
+    def visit_DropTable(self, node):
+        self._bloquear_catalogo(node.table)
+        if node.table not in self.catalog:
+            if node.if_exists:
+                return {"message": f"la tabla '{node.table}' no existe; se omite"}
+            raise SemanticError(f"la tabla '{node.table}' no existe")
+        tabla = self.catalog.pop(node.table)
+        if isinstance(tabla, StorageTable):
+            tabla.destruir()
+        self.plan.append(self._paso("Drop Table", base_de(tabla), node.table, 0))
+        return {"message": f"tabla '{node.table}' eliminada"}
+
+    def visit_DropIndex(self, node):
+        existentes = nombres_de_indices(self.catalog)
+        if node.name not in existentes:
+            if node.if_exists:
+                return {"message": f"el índice '{node.name}' no existe; se omite"}
+            raise SemanticError(f"el índice '{node.name}' no existe")
+        self._bloquear_catalogo(existentes[node.name])
+        tabla = self._tabla(existentes[node.name])
+        if node.name not in tabla.secundarios:
+            raise SemanticError(f"'{node.name}' es un índice propio de la tabla '{tabla.name}' y no se puede eliminar; solo se eliminan índices creados con CREATE INDEX")
+        tabla.eliminar_indice(node.name)
+        self.plan.append(self._paso("Drop Index", tabla.name, node.name, 0))
+        return {"message": f"índice '{node.name}' eliminado de '{tabla.name}'"}
 
     def _plan_update(self, node):
         tabla = self._tabla(node.table)

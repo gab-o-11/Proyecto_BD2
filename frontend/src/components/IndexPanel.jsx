@@ -10,10 +10,10 @@ function opcionesDe(tables) {
     for (const i of t.indexes || []) {
       if (!TIPOS[i.type]) continue
       salida.push({
-        value: JSON.stringify([t.name, i.field]),
+        value: JSON.stringify([t.name, i.field, i.name]),
         tabla: t.name,
         columna: i.field,
-        label: `${t.name}.${i.field} · ${TIPOS[i.type]}`,
+        label: `${t.name}.${i.field} · ${TIPOS[i.type]}${i.type !== 'RTREE' && !i.primary ? ` · ${i.name}` : ''}`,
       })
     }
   }
@@ -166,8 +166,8 @@ export default function IndexPanel({ tables, result, onRectangulos }) {
   const centrar = useRef(false)
 
   const recorrido = result && !result.error ? result.recorrido || [] : []
-  const [tabla, columna] = elegido ? JSON.parse(elegido) : ['', '']
-  const entrada = recorrido.find((r) => r.tabla === tabla && r.columna === columna)
+  const [tabla, columna, nombre] = elegido ? JSON.parse(elegido) : ['', '', '']
+  const entrada = recorrido.find((r) => r.tabla === tabla && r.indice === nombre)
   const visitadas = new Set(entrada ? entrada.paginas : [])
   const rtree = info?.tipo === 'RTREE'
 
@@ -177,7 +177,7 @@ export default function IndexPanel({ tables, result, onRectangulos }) {
   }
 
   useEffect(() => {
-    const usado = recorrido.map((r) => JSON.stringify([r.tabla, r.columna])).find((v) => opciones.some((o) => o.value === v))
+    const usado = recorrido.map((r) => JSON.stringify([r.tabla, r.columna, r.indice])).find((v) => opciones.some((o) => o.value === v))
     if (usado) setElegido(usado)
     else if (!opciones.some((o) => o.value === elegido)) setElegido(opciones[0]?.value || '')
   }, [tables, result])
@@ -190,7 +190,7 @@ export default function IndexPanel({ tables, result, onRectangulos }) {
     }
     const mio = ++turno.current
     setError('')
-    describirIndice(tabla, columna, null, 2).then(async (r) => {
+    describirIndice(tabla, columna, null, 2, nombre).then(async (r) => {
       if (mio !== turno.current) return
       if (r.error) {
         setError(r.error)
@@ -234,7 +234,7 @@ export default function IndexPanel({ tables, result, onRectangulos }) {
       const caminos = hijosDe(nodo).filter((h) => visitadas.has(h))
       if (!caminos.length) continue
       if (hijosDe(nodo).some((h) => !mapa[h])) {
-        const r = await describirIndice(tabla, columna, pagina, 1)
+        const r = await describirIndice(tabla, columna, pagina, 1, nombre)
         if (mio !== turno.current) return
         if (r.nodo) aplanar(r.nodo, mapa)
       }
@@ -254,7 +254,7 @@ export default function IndexPanel({ tables, result, onRectangulos }) {
       return
     }
     if (hijosDe(nodo).some((h) => !nodosRef.current[h])) {
-      const r = await describirIndice(tabla, columna, pagina, 1)
+      const r = await describirIndice(tabla, columna, pagina, 1, nombre)
       if (r.error) {
         setError(r.error)
         return

@@ -10,6 +10,8 @@ DEFAULT_EQ_SEL = 0.005
 DEFAULT_SPATIAL_SEL = 0.005
 EARTH_RADIUS_METERS = 6_371_000.0
 DEFAULT_INEQ_SEL = 1.0 / 3.0
+DEFAULT_RANGE_SEL = 0.005
+DEFAULT_MATCH_SEL = 0.005
 DEFAULT_NUM_DISTINCT = 200
 DEFAULT_WIDTH = 32
 DEFAULT_BLOCK_FACTOR = 32
@@ -59,6 +61,26 @@ class Perfil:
             return info["n_distinct"]
         return DEFAULT_NUM_DISTINCT
 
+    def fraccion_nula(self, columna):
+        info = self.columnas.get(columna)
+        if info and info.get("nulos") is not None:
+            return info["nulos"]
+        return DEFAULT_EQ_SEL
+
+    def selectividad_rango(self, columna, bajo, alto):
+        info = self.columnas.get(columna)
+        if not info:
+            return DEFAULT_RANGE_SEL
+        minimo, maximo = info.get("min"), info.get("max")
+        if not all(_es_numero(v) for v in (bajo, alto, minimo, maximo)):
+            return DEFAULT_RANGE_SEL
+        if alto < bajo:
+            return 0.0
+        if maximo == minimo:
+            return 1.0 if bajo <= minimo <= alto else 0.0
+        fraccion = (min(alto, maximo) - max(bajo, minimo)) / (maximo - minimo)
+        return min(1.0, max(0.0, fraccion))
+
     def selectividad(self, condicion):
         info = self.columnas.get(condicion.column)
         valor = condicion.value
@@ -96,15 +118,17 @@ def costo_seq_scan(perfil, con_filtro):
     return 0.0, total
 
 
-def costo_index_scan(perfil, tipo, filas):
+def costo_index_scan(perfil, tipo, filas, altura=None):
     n = max(perfil.filas, 1)
+    if altura is None:
+        altura = perfil.altura
     if tipo == "HASH":
         inicio = 0.0
         paginas_indice = 1 + filas // perfil.block_factor
     else:
         inicio = math.ceil(math.log2(n + 1)) * CPU_OPERATOR_COST
-        inicio += (perfil.altura + 1) * 50 * CPU_OPERATOR_COST
-        paginas_indice = perfil.altura - 1 + max(1, math.ceil(filas / perfil.block_factor))
+        inicio += (altura + 1) * 50 * CPU_OPERATOR_COST
+        paginas_indice = altura - 1 + max(1, math.ceil(filas / perfil.block_factor))
     total = inicio + paginas_indice * RANDOM_PAGE_COST
     total += filas * (CPU_INDEX_TUPLE_COST + CPU_OPERATOR_COST)
     if tipo == "BPLUS_CLUSTERED":

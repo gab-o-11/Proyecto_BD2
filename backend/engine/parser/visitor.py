@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from .nodes import Distance, Point, aggregate_name
+from .nodes import And, Distance, Or, Point, aggregate_name
 
 
 class Visitor(ABC):
@@ -26,6 +26,12 @@ class Visitor(ABC):
     def visit_Explain(self, node): ...
     @abstractmethod
     def visit_Analyze(self, node): ...
+    @abstractmethod
+    def visit_CreateIndex(self, node): ...
+    @abstractmethod
+    def visit_DropTable(self, node): ...
+    @abstractmethod
+    def visit_DropIndex(self, node): ...
 
 class PrintVisitor(Visitor):
     def render(self, sentencias) -> str:
@@ -66,8 +72,9 @@ class PrintVisitor(Visitor):
         return sql
 
     def visit_Insert(self, node):
-        valores = ", ".join(self._literal(v) for v in node.values)
-        return f"INSERT INTO {node.table} VALUES ({valores})"
+        filas = ", ".join("(" + ", ".join(self._literal(v) for v in fila) + ")" for fila in node.all_values())
+        columnas = "" if node.columns is None else " (" + ", ".join(node.columns) + ")"
+        return f"INSERT INTO {node.table}{columnas} VALUES {filas}"
 
     def visit_Delete(self, node):
         return f"DELETE FROM {node.table} WHERE {node.where.accept(self)}"
@@ -76,9 +83,38 @@ class PrintVisitor(Visitor):
         columna = node.column.accept(self) if isinstance(node.column, Distance) else node.column
         return f"{columna} {node.op} {self._literal(node.value)}"
 
+    def _operando(self, node):
+        texto = node.accept(self)
+        return "(" + texto + ")" if isinstance(node, (And, Or)) else texto
+
+    def visit_And(self, node):
+        return " AND ".join(self._operando(c) for c in node.conditions)
+
+    def visit_Or(self, node):
+        return " OR ".join(self._operando(c) for c in node.conditions)
+
+    def visit_Not(self, node):
+        return "NOT " + self._operando(node.condition)
+
+    def _expresion(self, columna):
+        return columna.accept(self) if isinstance(columna, Distance) else columna
+
     def visit_Between(self, node):
-        columna = node.column.accept(self) if isinstance(node.column, Distance) else node.column
-        return f"{columna} BETWEEN {self._literal(node.low)} AND {self._literal(node.high)}"
+        negado = "NOT " if node.negated else ""
+        return f"{self._expresion(node.column)} {negado}BETWEEN {self._literal(node.low)} AND {self._literal(node.high)}"
+
+    def visit_InList(self, node):
+        negado = "NOT " if node.negated else ""
+        valores = ", ".join(self._literal(v) for v in node.values)
+        return f"{self._expresion(node.column)} {negado}IN ({valores})"
+
+    def visit_Like(self, node):
+        negado = "NOT " if node.negated else ""
+        return f"{node.column} {negado}LIKE {self._literal(node.pattern)}"
+
+    def visit_IsNull(self, node):
+        negado = "NOT " if node.negated else ""
+        return f"{self._expresion(node.column)} IS {negado}NULL"
 
     def visit_Point(self, node):
         return f"POINT({node.latitude}, {node.longitude})"
@@ -96,6 +132,8 @@ class PrintVisitor(Visitor):
 
     @staticmethod
     def _literal(valor):
+        if valor is None:
+            return "NULL"
         if isinstance(valor, Point):
             return PrintVisitor().visit_Point(valor)
         return "'" + valor.replace("'", "''") + "'" if isinstance(valor, str) else str(valor)
@@ -135,3 +173,15 @@ class PrintVisitor(Visitor):
 
     def visit_Analyze(self, node):
         return f"ANALYZE {node.table}"
+
+    def visit_CreateIndex(self, node):
+        sql = f"CREATE INDEX {node.name} ON {node.table} ({node.column})"
+        if node.kind is not None:
+            sql += f" USING {node.kind}"
+        return sql
+
+    def visit_DropTable(self, node):
+        return "DROP TABLE " + ("IF EXISTS " if node.if_exists else "") + node.table
+
+    def visit_DropIndex(self, node):
+        return "DROP INDEX " + ("IF EXISTS " if node.if_exists else "") + node.name
