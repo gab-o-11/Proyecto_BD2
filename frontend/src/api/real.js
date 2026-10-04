@@ -20,6 +20,7 @@ function normStatement(s) {
   if (s.rows) out.rows = s.rows
   if (s.message) out.message = s.message
   if (s.explain) out.explain = s.explain
+  if (s.spatial) out.spatial = s.spatial
   return out
 }
 
@@ -34,12 +35,12 @@ export async function listTables() {
   }
 }
 
-export async function runQuery(sql) {
+export async function runQuery(sql, parameters = {}) {
   try {
     const res = await fetch('/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sql }),
+      body: JSON.stringify({ sql, parameters }),
     })
     if (!res.ok) return { error: 'HTTP ' + res.status, plan: [], statements: [] }
     const data = await res.json()
