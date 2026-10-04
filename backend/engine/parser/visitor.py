@@ -76,3 +76,10 @@ class PrintVisitor(Visitor):
         if node.where is not None:
             sql += " WHERE " + node.where.accept(self)
         return sql
+
+    def visit_Explain(self, node):
+        prefijo = "EXPLAIN ANALYZE " if node.analyze else "EXPLAIN "
+        return prefijo + node.statement.accept(self)
+
+    def visit_Analyze(self, node):
+        return f"ANALYZE {node.table}"
