@@ -106,7 +106,7 @@ CREATE TABLE stock (id INT PRIMARY KEY, cant INT) USING BPLUS_CLUSTERED;        
 INSERT INTO alumnos VALUES (1, 'Ana', 18.5);
 SELECT * FROM alumnos WHERE id = 1;
 
--- 10. Transacciones (bloqueo exclusivo de tabla)
+-- 10. Transacciones (bloqueos PS/PU/PX de tabla)
 BEGIN TRANSACTION;
 INSERT INTO ventas VALUES (99, 3, 500, 'A');
 END TRANSACTION;
@@ -285,7 +285,7 @@ El corazón de la ejecución. Puntos importantes:
   - **ORDER BY** usa `external_sort` de `external_sort.py` (runs a disco + `heapq.merge` k-way). Plan `Order By (external-merge)`. El umbral de spill es la constante `MEM_BUDGET` en `executor.py` (bájala para forzar spill en la demo).
 - **`visit_CreateTable`** — si hay `data_dir`, crea una `StorageTable` real en disco. `index_column` viene del `PRIMARY KEY` (o la primera columna si no hay); `index_kind` viene de la cláusula `USING` (o `HASH` si se omite). Si no hay `data_dir`, cae a la `Table` en memoria.
 - **`visit_Insert/Delete/Update`** — delegan en la tabla y registran el paso en `self.plan`.
-- **Transacciones**: `_bloquear_tabla` pide un lock exclusivo de tabla **solo si hay una transacción activa en el hilo**. Fuera de `BEGIN/END` no bloquea nada.
+- **Transacciones**: `_bloquear_tabla` pide `PS` para `SELECT` y `PX` para `INSERT/UPDATE/DELETE`, solo si hay una transacción activa en el hilo. Fuera de `BEGIN/END` no bloquea nada.
 - Existe una `Table` en memoria (lista de dicts, búsqueda lineal) como fallback cuando no hay `data_dir`; la ruta real de producción usa `StorageTable`.
 
 ### 2.5 Catálogo y tabla de almacenamiento — `engine/catalog.py`
@@ -372,12 +372,12 @@ Parte 2.1.2 de "external algorithms". El sort y el group_by **ya están cableado
 
 ### 2.9 Transacciones — `engine/transactions/`
 
-2PL **estricto**, bloqueos exclusivos a nivel de recurso (tabla o página).
+2PL **estricto**, con bloqueos `PS`/`PU`/`PX` a nivel de recurso (tabla o página).
 
 - **`models.py`**: `Transaction(transaction_id, thread_id, state)`, `TransactionState (ACTIVE/ENDED)`, `TransactionError`.
 - **`resources.py`**: `Resource(tipo, nombre[, id])` — lo que se protege.
-- **`lock_manager.py`**: `LockManager` mantiene `owners[resource] = transaction_id`, coordina la espera con `threading.Condition` (timeout 5 s) y registra historial `WAIT/ACQUIRED/RELEASED`.
-- **`manager.py`**: `TransactionManager` — una transacción activa por `thread_id`; `begin/current/end/acquire`. `end()` hace `release_all` (libera todo hasta el END → 2PL estricto).
+- **`lock_manager.py`**: `LockManager` implementa los modos `PS` (compartido), `PU` (actualización) y `PX` (exclusivo), coordina la espera con `threading.Condition` (timeout 5 s), permite conversiones de lock y registra historial `WAIT/ACQUIRED/UPGRADED/RELEASED`.
+- **`manager.py`**: `TransactionManager` — una transacción activa por `thread_id`; `begin/current/end/acquire`. `acquire` recibe el modo de lock y `end()` hace `release_all` (libera todo hasta el END → 2PL estricto).
 - **`demo.py`**: evidencia de *lost update* — dos hilos sobre un valor inicial 100 (uno +50, otro −30). Sin locks el resultado es 70 (una escritura pisa a la otra); con locks es 120.
 - **Límites actuales**: no hay ROLLBACK, ni detección de deadlocks, ni bloqueos compartidos, ni niveles de aislamiento configurables.
 

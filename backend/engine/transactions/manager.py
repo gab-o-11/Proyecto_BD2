@@ -1,7 +1,7 @@
 import threading
 
 from .lock_manager import LockManager
-from .models import Transaction, TransactionError, TransactionState
+from .models import LockMode, Transaction, TransactionError, TransactionState
 
 
 class TransactionManager:
@@ -46,7 +46,7 @@ class TransactionManager:
             del self.transactions[thread_id]
             return transaction
 
-    def acquire(self, resource, timeout=5):
+    def acquire(self, resource, mode=LockMode.PX, timeout=5):
         transaction = self.current()
         if transaction is None:
             raise TransactionError("No existe una transacción activa")
@@ -54,5 +54,6 @@ class TransactionManager:
         return self.lock_manager.acquire(
             transaction.transaction_id,
             resource,
+            mode,
             timeout,
         )

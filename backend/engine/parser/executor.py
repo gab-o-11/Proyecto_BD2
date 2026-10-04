@@ -1,7 +1,7 @@
 import operator
 from .visitor import Visitor
 from ..catalog import StorageTable
-from ..transactions import Resource, TransactionError, TransactionManager
+from ..transactions import LockMode, Resource, TransactionError, TransactionManager
 from ..external import external_sort
 from ..hashing import external_group_by
 
@@ -110,7 +110,7 @@ class Executor(Visitor):
 
     def visit_Insert(self, node):
         tabla = self._tabla(node.table)
-        self._bloquear_tabla(tabla)
+        self._bloquear_tabla(tabla, LockMode.PX)
         if len(node.values) != len(tabla.columns):
             raise SemanticError(
                 f"'{tabla.name}' tiene {len(tabla.columns)} columnas "
@@ -122,7 +122,7 @@ class Executor(Visitor):
 
     def visit_Delete(self, node):
         tabla = self._tabla(node.table)
-        self._bloquear_tabla(tabla)
+        self._bloquear_tabla(tabla, LockMode.PX)
         filas = self._filtrar(tabla, node.where)
         eliminadas = tabla.remove(filas)
         self.plan.append(self._paso("Delete", "lazy", tabla.name, eliminadas))
@@ -130,7 +130,7 @@ class Executor(Visitor):
 
     def visit_Select(self, node):
         tabla = self._tabla(node.table)
-        self._bloquear_tabla(tabla)
+        self._bloquear_tabla(tabla, LockMode.PS)
         columnas = tabla.columns if node.columns is None else node.columns
         for c in columnas:
             self._columna(tabla, c)
@@ -252,10 +252,10 @@ class Executor(Visitor):
         self.plan.append(self._paso("End", "transaction", "", 0))
         return None
 
-    def _bloquear_tabla(self, tabla):
+    def _bloquear_tabla(self, tabla, mode):
         if self.transaction_manager.current() is None:
             return
-        self.transaction_manager.acquire(Resource("table", tabla.name))
+        self.transaction_manager.acquire(Resource("table", tabla.name), mode)
 
     def visit_CreateTable(self, node):
         if node.table in self.catalog:
@@ -289,7 +289,7 @@ class Executor(Visitor):
 
     def visit_Update(self, node):
         tabla = self._tabla(node.table)
-        self._bloquear_tabla(tabla)
+        self._bloquear_tabla(tabla, LockMode.PX)
         for columna, _ in node.assignments:
             self._columna(tabla, columna)
         filas = self._filtrar(tabla, node.where)

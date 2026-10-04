@@ -7,6 +7,14 @@ class TransactionState(Enum):
     ENDED = "ended"
 
 
+class LockMode(Enum):
+    """Modos de bloqueo del protocolo del curso."""
+
+    PS = "PS"  # Compartido (shared)
+    PU = "PU"  # Actualización (update)
+    PX = "PX"  # Exclusivo (exclusive)
+
+
 class TransactionError(Exception):
     pass
 

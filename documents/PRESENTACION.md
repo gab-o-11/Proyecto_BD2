@@ -38,7 +38,7 @@ Guion de sustentación: **(1)** estructura del proyecto y **(2)** demo en vivo c
 | Externos | **External Sorting** | ORDER BY que no cabe en RAM (runs a disco + k-way merge) |
 | Externos | **External Hashing** | GROUP BY con particionado a disco (Grace hash) |
 | Motor | **Parser + Executor** | SQL → plan de ejecución; elige índice vs scan |
-| Motor | **Transacciones** | BEGIN/END con bloqueo exclusivo por tabla (2PL estricto) |
+| Motor | **Transacciones** | BEGIN/END con locks PS/PU/PX por tabla (2PL estricto) |
 
 ### Las 3 tablas sembradas (una por estructura)
 
@@ -134,7 +134,7 @@ DELETE FROM ventas WHERE id = 99;
 END TRANSACTION;
 ```
 
-**Qué demuestra:** dentro de `BEGIN … END` cada operación toma un **bloqueo exclusivo** de la tabla (2PL estricto: los locks se retienen hasta el `END`). Fuera de transacción, las operaciones no bloquean. (La evidencia de *lost update* sin locks vs con locks está en `engine.transactions.demo`, ejecutable con `python -m engine.transactions.demo`.)
+**Qué demuestra:** dentro de `BEGIN … END` cada operación toma un bloqueo de tabla según su intención: `PS` para `SELECT` y `PX` para `INSERT`/`UPDATE`/`DELETE` (2PL estricto: los locks se retienen hasta el `END`). Fuera de transacción, las operaciones no bloquean. El modo `PU` queda disponible para lecturas con intención de actualización. (La evidencia de *lost update* sin locks vs con locks está en `engine.transactions.demo`, ejecutable con `python -m engine.transactions.demo`.)
 
 ---
 
@@ -147,6 +147,6 @@ END TRANSACTION;
  ✔ Agregaciones:                 COUNT · SUM · AVG · MIN · MAX (por grupo y globales)
  ✔ DML:                          INSERT · UPDATE · DELETE + persistencia en disco
  ✔ DDL:                          CREATE TABLE con PRIMARY KEY y USING <índice>
- ✔ Transacciones:                BEGIN/END con bloqueo exclusivo (2PL estricto)
+ ✔ Transacciones:                BEGIN/END con PS/PU/PX (2PL estricto)
  ✔ Plan de ejecución:            visible en el panel por cada consulta
 ```
