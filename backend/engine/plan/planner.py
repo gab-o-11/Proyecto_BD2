@@ -71,8 +71,27 @@ def unir(izquierda, derecha, clave_izquierda, clave_derecha, memoria):
     total = inicio + (izquierda.filas_est + derecha.filas_est + filas) * costos.CPU_TUPLE_COST
     return HashJoin(izquierda, derecha, clave_izquierda, clave_derecha, memoria).estimar(inicio, total, filas, izquierda.ancho + derecha.ancho)
 
+def _combinar_rango(hijo, condicion):
+    if not isinstance(hijo, IndexScan) or not hijo.rango or hijo.alto is not None:
+        return None
+    if hijo.condicion.op not in (">", ">=") or condicion.op not in ("<", "<="):
+        return None
+    if condicion.column != hijo.condicion.column or not hasattr(hijo.tabla, "search_between"):
+        return None
+    perfil = Perfil(hijo.tabla)
+    if condicion.column in perfil.columnas:
+        seleccion = max(0.0, perfil.selectividad(hijo.condicion) + perfil.selectividad(condicion) - 1.0)
+    else:
+        seleccion = costos.DEFAULT_EQ_SEL
+    filas = ajustar_filas(perfil.filas * seleccion)
+    inicio, total = costos.costo_index_scan(perfil, _tipo_indice(hijo.tabla), filas)
+    return IndexScan(hijo.tabla, hijo.condicion, True, condicion).estimar(inicio, total, filas, perfil.ancho)
 
 def filtrar(hijo, condicion, key_fn=None, detail=None, selectividad=None):
+    if key_fn is None:
+        combinado = _combinar_rango(hijo, condicion)
+        if combinado is not None:
+            return combinado
     if selectividad is None:
         selectividad = costos.DEFAULT_EQ_SEL
     total = hijo.costo_total + hijo.filas_est * costos.CPU_OPERATOR_COST
