@@ -31,8 +31,18 @@ class PrintVisitor(Visitor):
         return "\n".join(s.accept(self) + ";" for s in sentencias)
 
     def visit_Select(self, node):
-        columnas = "*" if node.columns is None else ", ".join(node.columns)
-        sql = f"SELECT {columnas} FROM {node.table}"
+
+        if node.columns is None:
+            items = ["*"]
+        else:
+            items = list(node.columns)
+            for func, arg in node.aggregates or []:
+                argumento = "*" if arg is None else arg
+                items.append(f"{func.upper()}({argumento})")
+
+        sql = f"SELECT {', '.join(items)} FROM {node.table}"
+
+
         if node.where is not None:
             sql += " WHERE " + node.where.accept(self)
         if node.group_by is not None:
