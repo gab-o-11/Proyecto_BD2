@@ -31,7 +31,7 @@ export default function App() {
     setUltimaConsulta(sql)
     if (res.explain && !res.error) setVista('plan')
     else if (vista === 'plan') setVista('resultados')
-    if (res.statements?.some(s => ['insert', 'update', 'delete', 'create'].includes(s.type))) setDataVersion(v => v + 1)
+    if (res.statements?.some(s => ['insert', 'update', 'delete', 'create', 'drop'].includes(s.type))) setDataVersion(v => v + 1)
     setLoading(false)
     listTables().then(setTables)
   }

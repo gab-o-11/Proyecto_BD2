@@ -395,6 +395,11 @@ body {
   font-family: "Consolas", "Courier New", monospace;
 }
 
+.grid-table td.nulo {
+  color: var(--muted);
+  font-style: italic;
+}
+
 
 .ex-kind {
   font-weight: 600;

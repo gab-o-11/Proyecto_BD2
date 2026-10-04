@@ -38,7 +38,7 @@ export default function ResultsPanel({ result }) {
                     <tr key={i}>
                       <td className="rownum">{i + 1}</td>
                       {table.columns.map((c) => (
-                        <td key={c} className={c === 'QUERY PLAN' ? 'query-plan' : undefined}>{String(r[c])}</td>
+                        <td key={c} className={c === 'QUERY PLAN' ? 'query-plan' : r[c] === null ? 'nulo' : undefined}>{r[c] === null ? 'NULL' : String(r[c])}</td>
                       ))}
                     </tr>
                   ))}

@@ -87,9 +87,10 @@ async function leerJson(url) {
   }
 }
 
-export function describirIndice(tabla, columna, pagina, profundidad) {
+export function describirIndice(tabla, columna, pagina, profundidad, indice) {
   const params = new URLSearchParams({ column: columna, depth: String(profundidad) })
   if (pagina !== undefined && pagina !== null) params.set('page', String(pagina))
+  if (indice) params.set('index', indice)
   return leerJson(`/api/tables/${encodeURIComponent(tabla)}/index?${params}`)
 }
 
