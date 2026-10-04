@@ -73,7 +73,10 @@ class ClusteredBPlusTree:
     def delete(self, key):
         removed = self.seq.delete(key)
         if removed:
-            self.tree.delete(key)
+            if self.seq.reorganizations != self._last_reorg:
+                self.rebuild()
+            else:
+                self.tree.delete(key)
         return removed
 
     def stats(self):

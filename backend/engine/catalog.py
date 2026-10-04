@@ -6,6 +6,7 @@ from engine.storage.heap.heapfile import Heapfile
 from engine.storage.sequential.sequential_file import SequentialFile
 from engine.hashing import ExtendibleHashIndex
 from engine.bplus import BPlusTree, ClusteredBPlusTree
+from engine.spatial_table import SpatialTable
 from engine.common import as_pair
 from engine.common.heap_adapter import heap_fetch, to_heap_rid
 
@@ -18,14 +19,17 @@ AUTOANALYZE_BASE = 50
 AUTOANALYZE_FACTOR = 0.1
 
 
-class StorageTable:
-    def __init__(self, name, schema, data_dir, index_field, index_kind):
+class StorageTable(SpatialTable):
+    def __init__(self, name, schema, data_dir, index_field, index_kind, column_definitions=None):
         self.name = name
+        self._init_spatial()
         self.schema = schema
         self.data_dir = data_dir
         self.index_field = index_field
         self.index_column = index_field
         self.index_kind = index_kind
+        self.column_definitions = column_definitions or {}
+        self.column_types = {name: definition["type"] for name, definition in self.column_definitions.items()}
 
         self.columns = []
         for col, col_type in schema:
@@ -37,8 +41,10 @@ class StorageTable:
                 record_format += "i"
             elif col_type == "float":
                 record_format += "f"
+            elif col_type == "point":
+                record_format += "dd"
             else:
-                record_format += str(STRLEN) + "s"
+                record_format += str(self._string_size(col)) + "s"
 
         self.is_clustered = index_kind == "BPLUS_CLUSTERED"
         key_type = self._key_type(index_field)
@@ -150,16 +156,23 @@ class StorageTable:
             "schema": columnas,
             "index_field": self.index_field,
             "index_kind": self.index_kind,
+            "column_definitions": self.column_definitions,
         }
         path = os.path.join(self.data_dir, self.name + TABLE_SUFFIX)
         with open(path, "w") as f:
             json.dump(descriptor, f)
 
     def _field_index(self, field):
-        for i in range(len(self.schema)):
-            if self.schema[i][0] == field:
-                return i
+        offset = 0
+        for col, col_type in self.schema:
+            if col == field:
+                return offset
+            offset += 2 if col_type == "point" else 1
         return 0
+
+    def _string_size(self, field):
+        size = self.column_definitions.get(field, {}).get("size")
+        return STRLEN if size is None else size * 4
 
     def _key_type(self, field):
         for col, col_type in self.schema:
@@ -168,7 +181,7 @@ class StorageTable:
                     return "int"
                 if col_type == "float":
                     return "float"
-                return "str:" + str(STRLEN)
+                return "str:" + str(self._string_size(field))
         return "int"
 
     def _to_tuple(self, row):
@@ -179,19 +192,23 @@ class StorageTable:
                 values.append(int(value))
             elif col_type == "float":
                 values.append(float(value))
+            elif col_type == "point":
+                values.extend(value)
             else:
-                values.append(str(value).encode()[:STRLEN])
+                values.append(str(value).encode()[:self._string_size(col)])
         return values
 
     def _to_dict(self, pair, data):
         row = {}
-        for i in range(len(self.schema)):
-            col = self.schema[i][0]
-            col_type = self.schema[i][1]
-            value = data[i]
+        offset = 0
+        for col, col_type in self.schema:
+            value = data[offset]
+            if col_type == "point":
+                value = tuple(data[offset:offset + 2])
             if col_type == "str":
                 value = value.rstrip(b"\x00").decode()
             row[col] = value
+            offset += 2 if col_type == "point" else 1
         row["__rid__"] = pair
         return row
 
@@ -213,12 +230,15 @@ class StorageTable:
         values = self._to_tuple(row)
         if self.is_clustered:
             self.index.insert(row[self.index_field], tuple(values))
+            self.spatial_indexes.clear()
             return
         rid = self.heap.insert(*values)
         pair = as_pair(rid)
         self.index.insert(row[self.index_field], pair)
+        self._spatial_insert(dict(row, __rid__=pair))
 
     def bulk_insert(self, rows):
+        self.spatial_indexes.clear()
         rows = list(rows)
         if self.is_clustered:
             values = [tuple(self._to_tuple(row)) for row in rows]
@@ -231,6 +251,17 @@ class StorageTable:
             pairs.append((row[self.index_field], as_pair(rid)))
         self.index.bulk_load(pairs)
         return len(rows)
+
+    @staticmethod
+    def spatial_id(row):
+        return row["__rid__"]
+
+    def spatial_row(self, rid):
+        if self.is_clustered:
+            data = self.seq._fields(self.seq.read_record(rid))
+        else:
+            data = heap_fetch(self.heap, rid)
+        return None if data is None else self._to_dict(rid, data)
 
     def scan(self):
         result = []
@@ -289,6 +320,7 @@ class StorageTable:
     def remove(self, rows):
         count = 0
         if self.is_clustered:
+            self.spatial_indexes.clear()
             for row in rows:
                 if self.index.delete(row[self.index_field]):
                     count += 1
@@ -297,6 +329,7 @@ class StorageTable:
             pair = row.get("__rid__")
             if pair is None:
                 continue
+            self._spatial_remove(row)
             self.heap.delete(to_heap_rid(pair))
             self.index.delete(row[self.index_field], pair)
             count += 1
@@ -306,6 +339,10 @@ class StorageTable:
         total = 0
         for row in rows:
             vieja = row[self.index_field]
+            if self.is_clustered:
+                self.spatial_indexes.clear()
+            else:
+                self._spatial_remove(row)
             for columna, valor in assignments:
                 row[columna] = valor
             values = tuple(self._to_tuple(row))
@@ -318,6 +355,7 @@ class StorageTable:
                 if row[self.index_field] != vieja:
                     self.index.delete(vieja, row["__rid__"])
                     self.index.insert(row[self.index_field], row["__rid__"])
+                self._spatial_insert(row)
             total = total + 1
         return total
 
@@ -387,6 +425,7 @@ def _load_tables(data_dir):
             data_dir,
             descriptor["index_field"],
             descriptor["index_kind"],
+            descriptor.get("column_definitions"),
         )
         catalogo[descriptor["name"]] = tabla
     for tabla in catalogo.values():
@@ -441,6 +480,7 @@ def table_info(tabla):
         columns.append({"name": col, "type": col_type})
     kind = str(tabla.index_kind).upper()
     indexes = [{"field": tabla.index_field, "type": kind}]
+    indexes.extend({"field": col, "type": "RTREE"} for col, typ in tabla.schema if typ == "point")
     storage = "sequential"
     if not tabla.is_clustered:
         storage = "heap"
