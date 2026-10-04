@@ -177,6 +177,8 @@ async def import_table(
         index_field = index_field or headers[0]
         if index_field not in headers:
             raise CSVImportError(f"la columna índice '{index_field}' no existe")
+        if dict(schema)[index_field] == "point":
+            raise CSVImportError("la columna índice no puede ser POINT; el R-Tree se crea solo para cada columna POINT")
         table = StorageTable(table_name, schema, DATA_DIR, index_field, index_kind)
         table.bulk_insert(rows)
         catalog[table_name] = table

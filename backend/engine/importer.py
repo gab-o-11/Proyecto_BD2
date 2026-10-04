@@ -1,9 +1,12 @@
 import csv
 import io
+import math
 import re
 
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+NUMERO = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
+PUNTO = re.compile(r"^POINT\s*\(\s*(" + NUMERO + r")\s*[, ]\s*(" + NUMERO + r")\s*\)$", re.IGNORECASE)
 
 
 class CSVImportError(Exception):
@@ -14,6 +17,8 @@ def _infer_type(values):
     values = [value.strip() for value in values if value.strip()]
     if not values:
         return "str"
+    if all(PUNTO.match(value) for value in values):
+        return "point"
     try:
         for value in values:
             int(value)
@@ -32,6 +37,14 @@ def _convert(value, col_type, row_number, column):
     value = value.strip()
     if not value:
         raise CSVImportError(f"fila {row_number}, columna '{column}': valor vacío")
+    if col_type == "point":
+        coincidencia = PUNTO.match(value)
+        if not coincidencia:
+            raise CSVImportError(f"fila {row_number}, columna '{column}': '{value}' no es POINT(lat, lon)")
+        punto = (float(coincidencia.group(1)), float(coincidencia.group(2)))
+        if not all(math.isfinite(v) for v in punto):
+            raise CSVImportError(f"fila {row_number}, columna '{column}': coordenadas no finitas")
+        return punto
     try:
         if col_type == "int":
             converted = int(value)
