@@ -1,16 +1,27 @@
 """Regresiones del R-Tree: ejecutar python -m engine.test_rtree."""
 
 import math
+import os
 import random
+import tempfile
 
 import engine.rtree as rtree_module
-from engine.rtree import RTree, contains_point, validate_polygon
+from engine.rtree import contains_point, validate_polygon
 from engine.spatial import distance
+
+_DIRECTORIO = tempfile.TemporaryDirectory(prefix="test_rtree_")
+_CONTADOR = [0]
+
+
+def _arbol(max_entries=16):
+    _CONTADOR[0] += 1
+    return rtree_module.RTree(os.path.join(_DIRECTORIO.name, "arbol%d" % _CONTADOR[0]), max_entries)
 
 
 def _check_structure(tree):
     depths, ordinals = set(), []
-    def visit(node, depth, root=False):
+    def visit(pid, depth, root=False):
+        node = tree._leer(pid)
         assert len(node.children) <= tree.max_entries
         if not root:
             assert len(node.children) >= tree.min_entries
@@ -26,8 +37,10 @@ def _check_structure(tree):
         else:
             assert not root or len(node.children) >= 2
             for child in node.children:
-                visit(child, depth + 1)
-    visit(tree.root, 1, True)
+                assert tree._leer(child.pid).bounds == child.bounds
+                assert len(tree._leer(child.pid).children) == child.count
+                visit(child.pid, depth + 1)
+    visit(tree.root_id, 1, True)
     assert depths == {tree.height}
     assert len(ordinals) == len(tree) == len(set(ordinals))
 
@@ -36,7 +49,7 @@ def _random_queries():
     rng = random.Random(487)
     records = [((rng.uniform(-90, 90), rng.uniform(-180, 180)), i) for i in range(450)]
     for capacity in (2, 3, 4, 16):
-        tree = RTree(capacity)
+        tree = _arbol(capacity)
         for coordinates, payload in records:
             tree.insert(coordinates, payload)
         _check_structure(tree)
@@ -70,7 +83,7 @@ def _random_queries():
 
 
 def _edges_and_polygons():
-    tree = RTree(4)
+    tree = _arbol(4)
     coordinates = [(0, 180), (0, -180), (90, 0), (90, 180), (-90, 30),
                    (0, 0), (0, 0), (0, 1), (0, -1), (1, 0)]
     for rid, p in enumerate(coordinates):
@@ -93,7 +106,7 @@ def _edges_and_polygons():
         center = (rng.uniform(-90, 90), rng.uniform(-180, 180))
         rid = rng.choice([0, 1, 2, 3, 4, 6, 7, 8, 9])
         assert rid in tree.search_radius(center, distance(center, coordinates[rid]))
-    duplicate = RTree(2)
+    duplicate = _arbol(2)
     for _ in range(9):
         duplicate.insert((1, 1), (5, 8))
     for count in range(9, 0, -1):
@@ -102,7 +115,7 @@ def _edges_and_polygons():
         _check_structure(duplicate)
     polygon = validate_polygon([(0, 0), (4, 0), (4, 4), (2, 2), (0, 4), (0, 0)])
     positions = [(0, 0), (2, 0), (2, 2), (2, 3), (1, 3), (3, 3), (4, 2), (5, 1), (1, 1)]
-    indexed = RTree(2)
+    indexed = _arbol(2)
     for rid, p in enumerate(positions):
         indexed.insert(p, rid)
     assert indexed.search_polygon(polygon) == [0, 1, 2, 4, 5, 6, 8]
@@ -117,10 +130,10 @@ def _lower_bounds_and_pruning():
         xs = sorted((rng.uniform(-90, 90), rng.uniform(-90, 90)))
         ys = sorted((rng.uniform(-180, 180), rng.uniform(-180, 180)))
         bounds = (xs[0], ys[0], xs[1], ys[1])
-        lower = RTree._lower_bound(center, bounds, "haversine")
+        lower = rtree_module.RTree._lower_bound(center, bounds, "haversine")
         for p in ((xs[0], ys[0]), (xs[1], ys[1]), (rng.uniform(*xs), rng.uniform(*ys))):
             assert lower <= distance(center, p) + 1e-6
-    tree = RTree(4)
+    tree = _arbol(4)
     for i in range(500):
         tree.insert((i * 10, i * 10), i)
     original = rtree_module.distance
@@ -138,8 +151,8 @@ def _lower_bounds_and_pruning():
 
 
 def _validation():
-    tree = RTree()
-    checks = [lambda: RTree(1), lambda: tree.insert((float("nan"), 0), 1),
+    tree = _arbol()
+    checks = [lambda: _arbol(1), lambda: tree.insert((float("nan"), 0), 1),
               lambda: tree.search((1, 0, -1, 0)), lambda: tree.search_radius((0, 0), -1),
               lambda: tree.knn((0, 0), -1), lambda: tree.knn((0, 0), 1, "unknown"),
               lambda: validate_polygon([(0, 0), (1, 1), (2, 2)]),
