@@ -1,6 +1,6 @@
 import struct
 
-from engine.storage.heap.heapfile import RID
+from engine.storage.heap.heapfile import ACTIVO, RID
 from engine.common.rid import as_pair
 from engine.common.io_stats import touch
 
@@ -20,7 +20,7 @@ def heap_fetch(heap, rid):
     if len(raw) < heap.RECORD_SIZE:
         return None
     record = struct.unpack(heap.RECORD_FORMAT, raw)
-    if record[-1] != -1:
+    if record[-1] != ACTIVO:
         return None
     return record[:-1]
 

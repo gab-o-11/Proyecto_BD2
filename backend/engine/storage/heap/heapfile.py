@@ -3,6 +3,10 @@ import os
 
 from engine.common.io_stats import touch
 
+ACTIVO = -1
+SIN_LIBRES = -1
+FIN_LIBRES = -2
+
 
 class RID:
     def __init__(self, page_id, slot_id):
@@ -106,46 +110,65 @@ class Heapfile:
             f.seek(page_id*self.PAGE_SIZE)
             f.write(struct.pack(self.PAGE_HEADER_FORMAT, id, num_registros, num_activos, free_list))
 
+    def _puntero(self, f, page_id, slot_id):
+        f.seek(self.calcular_slot(page_id, slot_id) + self.RECORD_SIZE - struct.calcsize("i"))
+        return struct.unpack("i", f.read(struct.calcsize("i")))[0]
+
+    def _escribir_registro(self, f, page_id, slot_id, registro):
+        f.seek(self.calcular_slot(page_id, slot_id))
+        f.write(struct.pack(self.RECORD_FORMAT, *registro, ACTIVO))
+
+    def _sumar_registros(self, cantidad):
+        page_size, total_pages, total_records, first_id = self.read_file_header()
+        self.write_file_header(page_size, total_pages, max(0, total_records + cantidad), first_id)
+
     def insert(self, *registro):
         with open(self.filename, "r+b") as f:
             page_size, tot_pag, tot_reg, first_id = self.read_file_header()
             for page_id in range(1, tot_pag + 1):
                 page_id_leido, num_reg, reg_act, free_list = self.read_page_header(page_id)
-                if free_list != -1:
-                    slot_id = free_list
-                    slot_offset = self.calcular_slot(page_id, slot_id)
-                    f.seek(slot_offset + self.RECORD_SIZE) 
-                    next_free = struct.unpack("i", f.read(4))[0]
-                    f.seek(slot_offset)
-                    f.write(struct.pack(self.RECORD_FORMAT, *registro,-1))
-                    self.actualizar_page_header(page_id, nuevo_registro=True, eliminar_registro=False, nuevo_free_list_head=next_free)
-                    self.actualizar_file_header(False, True)
-                    return RID(page_id, slot_id)
-            new_page_id = self.new_page()
-            slot_id = 0
-            slot_offset = self.calcular_slot(new_page_id, slot_id)
-            f.seek(slot_offset)
-            f.write(struct.pack(self.RECORD_FORMAT, *registro, -1))
-            self.actualizar_file_header(False, True)
-            self.actualizar_page_header(new_page_id, nuevo_registro=True, eliminar_registro=False)
-            return RID(new_page_id, slot_id)
+                if free_list == SIN_LIBRES:
+                    continue
+                slot_id = free_list
+                siguiente = self._puntero(f, page_id, slot_id)
+                if siguiente == FIN_LIBRES:
+                    siguiente = SIN_LIBRES
+                self._escribir_registro(f, page_id, slot_id, registro)
+                self.write_page_header(page_id, num_reg, reg_act + 1, siguiente)
+                self._sumar_registros(1)
+                return RID(page_id, slot_id)
+            if tot_pag > 0:
+                page_id_leido, num_reg, reg_act, free_list = self.read_page_header(tot_pag)
+                if num_reg < self.SLOT_PER_PAGE:
+                    slot_id = num_reg
+                    self._escribir_registro(f, tot_pag, slot_id, registro)
+                    self.write_page_header(tot_pag, num_reg + 1, reg_act + 1, free_list)
+                    self._sumar_registros(1)
+                    return RID(tot_pag, slot_id)
+        new_page_id = self.new_page()
+        with open(self.filename, "r+b") as f:
+            self._escribir_registro(f, new_page_id, 0, registro)
+        self.write_page_header(new_page_id, 1, 1, SIN_LIBRES)
+        self._sumar_registros(1)
+        return RID(new_page_id, 0)
 
     def delete(self, rid):
+        page_id, slot_id = rid.getter()
+        page_id_leido, num_reg, reg_act, free_list = self.read_page_header(page_id)
+        if slot_id >= num_reg:
+            raise ValueError("RID no válido")
         with open(self.filename, "r+b") as f:
-            page_id, slot_id = rid.getter()
-            slot_a_borrar = self.calcular_slot(page_id, slot_id)
-            page_id_leido, num_reg, reg_act, free_list = self.read_page_header(page_id)
-            if reg_act <= 0:
-                raise ValueError("No hay registros activos")
-            next_free = free_list
-            f.seek(slot_a_borrar + self.RECORD_SIZE - struct.calcsize("i"))
-            f.write(struct.pack("i", next_free))
-            self.write_page_header(page_id, num_reg, reg_act - 1, slot_id)
-            page_size, total_pages, total_records, first_id = self.read_file_header()
-            if total_records > 0:
-                self.write_file_header(page_size, total_pages, total_records - 1, first_id)
-            return True
-    
+            if self._puntero(f, page_id, slot_id) != ACTIVO:
+                return False
+            siguiente = free_list
+            if siguiente == SIN_LIBRES:
+                siguiente = FIN_LIBRES
+            f.seek(self.calcular_slot(page_id, slot_id) + self.RECORD_SIZE - struct.calcsize("i"))
+            f.write(struct.pack("i", siguiente))
+        self.write_page_header(page_id, num_reg, reg_act - 1, slot_id)
+        self._sumar_registros(-1)
+        return True
+
     def update(self, rid, nuevos_datos):
         page_id, slot_id = rid.getter()
         touch(self.filename, page_id)
@@ -156,7 +179,7 @@ class Heapfile:
             if len(raw) < self.RECORD_SIZE:
                 raise ValueError("RID no válido o slot vacío")
             record = struct.unpack(self.RECORD_FORMAT, raw)
-            if record[-1] != -1:
+            if record[-1] != ACTIVO:
                 raise ValueError("No se puede actualizar un slot libre")
             data = record[:-1]
             if len(nuevos_datos) != len(data):
@@ -179,7 +202,7 @@ class Heapfile:
                         continue
                     record = struct.unpack(self.RECORD_FORMAT, raw)
                     next_free = record[-1]
-                    if next_free != -1:
+                    if next_free != ACTIVO:
                         continue
                     data = record[:-1]
                     if campo_index < len(data) and data[campo_index] == valor_buscado:
