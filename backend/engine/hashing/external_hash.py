@@ -86,6 +86,8 @@ def _aggregate(rows, key_fn, specs):
                 value = None
             else:
                 value = extractor(row)
+                if value is None:
+                    continue
             accs[i] = _acc_step(op, accs[i], value)
     return table
 

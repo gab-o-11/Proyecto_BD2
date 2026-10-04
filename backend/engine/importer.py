@@ -36,7 +36,7 @@ def _infer_type(values):
 def _convert(value, col_type, row_number, column):
     value = value.strip()
     if not value:
-        raise CSVImportError(f"fila {row_number}, columna '{column}': valor vacío")
+        return None
     if col_type == "point":
         coincidencia = PUNTO.match(value)
         if not coincidencia:

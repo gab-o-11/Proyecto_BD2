@@ -32,7 +32,7 @@ class SpatialTable:
     def _cargar_indices(self, columns):
         filas = self.scan()
         for column in columns:
-            self.spatial_indexes[column].bulk_load([(row[column], self.spatial_id(row)) for row in filas])
+            self.spatial_indexes[column].bulk_load([(row[column], self.spatial_id(row)) for row in filas if row[column] is not None])
 
     def spatial_index(self, column):
         with self._spatial_lock:
@@ -48,8 +48,10 @@ class SpatialTable:
 
     def _spatial_insert(self, row):
         for column, tree in self.spatial_indexes.items():
-            tree.insert(row[column], self.spatial_id(row))
+            if row[column] is not None:
+                tree.insert(row[column], self.spatial_id(row))
 
     def _spatial_remove(self, row):
         for column, tree in self.spatial_indexes.items():
-            tree.delete(row[column], self.spatial_id(row))
+            if row[column] is not None:
+                tree.delete(row[column], self.spatial_id(row))

@@ -186,15 +186,24 @@ class BPlusTree:
             node = self._read(node.next_leaf)
         return result
 
+    def _leftmost(self):
+        node = self._read(self.root_id)
+        while not node.is_leaf:
+            node = self._read(node.children[0])
+        return node
+
     def range_search(self, low, high):
-        _, node = self._descend(low)
+        if low is None:
+            node = self._leftmost()
+        else:
+            _, node = self._descend(low)
         result = []
         while node is not None:
             over = False
             for k, rid in zip(node.keys, node.rids):
-                if k < low:
+                if low is not None and k < low:
                     continue
-                if k > high:
+                if high is not None and k > high:
                     over = True
                     break
                 result.append((k, rid))
@@ -204,9 +213,7 @@ class BPlusTree:
         return result
 
     def scan(self):
-        node = self._read(self.root_id)
-        while not node.is_leaf:
-            node = self._read(node.children[0])
+        node = self._leftmost()
         while node is not None:
             for k, rid in zip(node.keys, node.rids):
                 yield k, rid
