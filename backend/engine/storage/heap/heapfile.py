@@ -1,3 +1,4 @@
+import heapq
 import struct
 import os
 
@@ -36,6 +37,29 @@ class Heapfile:
             with open(filename, "wb") as f:
                 f.write(struct.pack(self.FILE_HEADER_FORMAT, self.PAGE_SIZE,0,0,1))
                 f.write(b"\x00" * (self.PAGE_SIZE - self.FILE_HEADER_SIZE))
+        self._cargar_mapa_libres()
+
+    def _cargar_mapa_libres(self):
+        self._con_huecos = set()
+        self._orden_huecos = []
+        total_pages = self.read_file_header()[1]
+        for page_id in range(1, total_pages + 1):
+            if self.read_page_header(page_id)[3] != SIN_LIBRES:
+                self._marcar_hueco(page_id)
+
+    def _marcar_hueco(self, page_id):
+        if page_id not in self._con_huecos:
+            self._con_huecos.add(page_id)
+            heapq.heappush(self._orden_huecos, page_id)
+
+    def _pagina_con_hueco(self):
+        while self._orden_huecos:
+            page_id = self._orden_huecos[0]
+            if page_id in self._con_huecos and self.read_page_header(page_id)[3] != SIN_LIBRES:
+                return page_id
+            heapq.heappop(self._orden_huecos)
+            self._con_huecos.discard(page_id)
+        return None
 
     def calcular_slot(self, page_id, slot_id):
         return (self.PAGE_SIZE*page_id)+self.PAGE_HEADER_SIZE+(slot_id*self.RECORD_SIZE)
@@ -125,14 +149,14 @@ class Heapfile:
     def insert(self, *registro):
         with open(self.filename, "r+b") as f:
             page_size, tot_pag, tot_reg, first_id = self.read_file_header()
-            for page_id in range(1, tot_pag + 1):
+            page_id = self._pagina_con_hueco()
+            if page_id is not None:
                 page_id_leido, num_reg, reg_act, free_list = self.read_page_header(page_id)
-                if free_list == SIN_LIBRES:
-                    continue
                 slot_id = free_list
                 siguiente = self._puntero(f, page_id, slot_id)
                 if siguiente == FIN_LIBRES:
                     siguiente = SIN_LIBRES
+                    self._con_huecos.discard(page_id)
                 self._escribir_registro(f, page_id, slot_id, registro)
                 self.write_page_header(page_id, num_reg, reg_act + 1, siguiente)
                 self._sumar_registros(1)
@@ -166,6 +190,7 @@ class Heapfile:
             f.seek(self.calcular_slot(page_id, slot_id) + self.RECORD_SIZE - struct.calcsize("i"))
             f.write(struct.pack("i", siguiente))
         self.write_page_header(page_id, num_reg, reg_act - 1, slot_id)
+        self._marcar_hueco(page_id)
         self._sumar_registros(-1)
         return True
 
