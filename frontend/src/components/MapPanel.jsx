@@ -9,7 +9,7 @@ const key = p => p.join(',')
 
 const COLORES_NIVEL = ['#14688f', '#2a9d8f', '#b08900', '#8e44ad', '#5c7280', '#c0392b']
 
-export default function MapPanel({ tables, result, dataVersion, location, onLocation, rectangulos }) {
+export default function MapPanel({ tables, result, dataVersion, location, onLocation, rectangulos, plegado, onPlegar }) {
   const container = useRef(null)
   const map = useRef(null)
   const layers = useRef(null)
@@ -110,12 +110,18 @@ export default function MapPanel({ tables, result, dataVersion, location, onLoca
       L.circleMarker(p, { radius: 6, weight: 2, color: '#d54a14', fillOpacity: 0.9 })
         .bindPopup(`Resultado: ${p[0]}, ${p[1]}`).addTo(layers.current)
     }
+    if (plegado) return
+    map.current.invalidateSize()
     const focus = highlighted.length ? highlighted : visible
     if (focus.length) map.current.fitBounds(L.latLngBounds(focus), { padding: [20, 20], maxZoom: 16 })
-  }, [points, result, selected])
+  }, [points, result, selected, plegado])
 
-  return <section className="panel spatial-map">
-    <h2>Mapa espacial</h2>
+  return <section className={plegado ? 'panel spatial-map plegado' : 'panel spatial-map'}>
+    <h2>
+      <button className="plegar" onClick={onPlegar} aria-label={plegado ? 'Mostrar mapa' : 'Ocultar mapa'} aria-expanded={!plegado} title={plegado ? 'Mostrar mapa' : 'Ocultar mapa'}>{plegado ? '▸' : '▾'}</button>
+      <span>Mapa espacial</span>
+      {plegado && <span className="muted plegado-resumen">{highlighted.length} resultados en el mapa</span>}
+    </h2>
     <div className="toolbar map-toolbar">
       <label>Datos <select aria-label="Columna espacial" value={selected} onChange={e => setSelected(e.target.value)}>
         {!options.length && <option value="">Sin columnas POINT</option>}
