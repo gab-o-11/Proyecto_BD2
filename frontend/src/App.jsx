@@ -10,6 +10,29 @@ import ExplainTree from './components/ExplainTree'
 
 const CONSULTA_ESPACIAL = /\b(distancia|intersecta)\s*\(/i
 
+function leerPreferencia(clave) {
+  try {
+    return localStorage.getItem(clave) === '1'
+  } catch {
+    return false
+  }
+}
+
+function usePlegado(clave) {
+  const [plegado, setPlegado] = useState(() => leerPreferencia(clave))
+  function alternar() {
+    setPlegado((actual) => {
+      try {
+        localStorage.setItem(clave, actual ? '0' : '1')
+      } catch {
+        return !actual
+      }
+      return !actual
+    })
+  }
+  return [plegado, alternar]
+}
+
 export default function App() {
   const [tables, setTables] = useState([])
   const [result, setResult] = useState(null)
@@ -19,6 +42,8 @@ export default function App() {
   const [vista, setVista] = useState('resultados')
   const [rectangulos, setRectangulos] = useState(null)
   const [ultimaConsulta, setUltimaConsulta] = useState('')
+  const [archivosPlegado, plegarArchivos] = usePlegado('bd2.archivosPlegado')
+  const [mapaPlegado, plegarMapa] = usePlegado('bd2.mapaPlegado')
 
   useEffect(() => {
     listTables().then(setTables)
@@ -70,12 +95,12 @@ export default function App() {
         <h1>MiniGestor BD2</h1>
         <span className="db">— base de datos: minidb</span>
       </header>
-      <div className="layout">
-        <FilesPanel tables={tables} onImport={importar} onReset={reiniciar} loading={loading} />
-        <div className={mostrarMapa ? 'workarea' : 'workarea sin-mapa'}>
+      <div className={archivosPlegado ? 'layout sin-archivos' : 'layout'}>
+        <FilesPanel tables={tables} onImport={importar} onReset={reiniciar} loading={loading} plegado={archivosPlegado} onPlegar={plegarArchivos} />
+        <div className={!mostrarMapa ? 'workarea sin-mapa' : mapaPlegado ? 'workarea mapa-plegado' : 'workarea'}>
           <QueryPanel onRun={ejecutar} loading={loading} />
           {mostrarMapa && (
-            <MapPanel tables={tables} result={result} dataVersion={dataVersion} location={location} onLocation={setLocation} rectangulos={mbrActivos ? rectangulos : null} />
+            <MapPanel tables={tables} result={result} dataVersion={dataVersion} location={location} onLocation={setLocation} rectangulos={mbrActivos ? rectangulos : null} plegado={mapaPlegado} onPlegar={plegarMapa} />
           )}
           <div className="bottom">
             <div className="stack">

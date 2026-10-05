@@ -1,4 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+
+const ZOOM_MIN = 0.25
+const ZOOM_MAX = 2
+const ZOOM_PASO = 0.1
+
+function acotar(valor) {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(valor * 100) / 100))
+}
 
 function fmt(n, d) {
   return Number(n).toFixed(d)
@@ -67,7 +75,34 @@ function Rama({ nodo, analyze, totalMs }) {
 
 export default function ExplainTree({ result }) {
   const [vista, setVista] = useState('arbol')
+  const [zoom, setZoom] = useState(1)
+  const marco = useRef(null)
+  const lienzo = useRef(null)
   const explain = result && !result.error ? result.explain : null
+
+  useEffect(() => {
+    const nodo = marco.current
+    if (!nodo) return
+    function rueda(evento) {
+      if (!evento.ctrlKey && !evento.metaKey) return
+      evento.preventDefault()
+      setZoom((actual) => acotar(actual * (evento.deltaY < 0 ? 1.1 : 1 / 1.1)))
+    }
+    nodo.addEventListener('wheel', rueda, { passive: false })
+    return () => nodo.removeEventListener('wheel', rueda)
+  }, [vista, explain])
+
+  function ajustar() {
+    if (!marco.current || !lienzo.current) return
+    const caja = lienzo.current.getBoundingClientRect()
+    const ancho = caja.width / zoom
+    const alto = caja.height / zoom
+    if (!ancho || !alto) return
+    const estilo = getComputedStyle(marco.current)
+    const disponibleAncho = marco.current.clientWidth - parseFloat(estilo.paddingLeft) - parseFloat(estilo.paddingRight)
+    const disponibleAlto = marco.current.clientHeight - parseFloat(estilo.paddingTop) - parseFloat(estilo.paddingBottom)
+    setZoom(acotar(Math.min(disponibleAncho / ancho, disponibleAlto / alto, 1)))
+  }
   const totalMs = explain?.analyze && explain.tree.actual ? explain.tree.actual.totalMs : 0
   return (
     <section className="panel plan-ancho">
@@ -76,15 +111,23 @@ export default function ExplainTree({ result }) {
         <div className="toolbar">
           <span className="ex-kind">{explain.analyze ? 'EXPLAIN ANALYZE' : 'EXPLAIN'}</span>
           <span className="lbl">las filas fluyen de derecha a izquierda</span>
+          {vista === 'arbol' && (
+            <span className="zoom-controles" role="group" aria-label="Zoom del árbol">
+              <button className="tab" onClick={() => setZoom((z) => acotar(z - ZOOM_PASO))} disabled={zoom <= ZOOM_MIN} aria-label="Alejar" title="Alejar (Ctrl + rueda)">−</button>
+              <button className="tab zoom-valor" onClick={() => setZoom(1)} title="Volver al 100 %">{Math.round(zoom * 100)} %</button>
+              <button className="tab" onClick={() => setZoom((z) => acotar(z + ZOOM_PASO))} disabled={zoom >= ZOOM_MAX} aria-label="Acercar" title="Acercar (Ctrl + rueda)">+</button>
+              <button className="tab" onClick={ajustar} title="Ajustar el árbol al panel">Ajustar</button>
+            </span>
+          )}
           <button className={vista === 'arbol' ? 'tab active' : 'tab'} onClick={() => setVista('arbol')}>Árbol</button>
           <button className={vista === 'texto' ? 'tab active' : 'tab'} onClick={() => setVista('texto')}>Texto</button>
         </div>
       )}
-      <div className="panel-body">
+      <div className="panel-body" ref={marco}>
         {!explain ? (
           <p className="muted">Ejecuta una consulta con Explain o Explain Analyze para ver su plan.</p>
         ) : vista === 'arbol' ? (
-          <div className="hp-lienzo">
+          <div className="hp-lienzo" ref={lienzo} style={{ zoom }}>
             <Rama nodo={explain.tree} analyze={explain.analyze} totalMs={totalMs} />
           </div>
         ) : (

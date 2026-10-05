@@ -29,7 +29,7 @@ function TableItem({ table }) {
   )
 }
 
-export default function FilesPanel({ tables, onImport, onReset, loading }) {
+export default function FilesPanel({ tables, onImport, onReset, loading, plegado, onPlegar }) {
   const inputRef = useRef(null)
   const [tableName, setTableName] = useState('')
   const [indexField, setIndexField] = useState('')
@@ -63,9 +63,23 @@ export default function FilesPanel({ tables, onImport, onReset, loading }) {
     setResetMessage(result?.error || result?.message || '')
   }
 
+  if (plegado) {
+    return (
+      <aside className="panel files plegado">
+        <button className="plegar-lateral" onClick={onPlegar} aria-label="Mostrar panel de archivos" aria-expanded="false" title="Mostrar archivos">
+          <span className="plegar-icono">▸</span>
+          <span className="plegar-texto">Archivos · {tables.length} tablas</span>
+        </button>
+      </aside>
+    )
+  }
+
   return (
     <aside className="panel files">
-      <h2>Archivos</h2>
+      <h2>
+        <span>Archivos</span>
+        <button className="plegar" onClick={onPlegar} aria-label="Ocultar panel de archivos" aria-expanded="true" title="Ocultar archivos">◂</button>
+      </h2>
       <div className="panel-body">
         <form className="import-form" onSubmit={submit}>
           <div className="idx-title">Importar CSV</div>
