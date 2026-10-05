@@ -1,212 +1,157 @@
-# Proyecto_BD2 — MiniGestor de Base de Datos Multimodal
+<div align="center">
 
-Monorepo del proyecto integrador de Base de Datos 2 (Ciclo 2026-2).
+# MiniGestor BD2
 
-## Estructura
+### Gestor de bases de datos multimodal construido desde cero
+
+Archivos paginados · índices B+, hash y R-Tree · SQL con planificador por costos · `EXPLAIN ANALYZE` · transacciones · consultas espaciales sobre un mapa
+
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-API%20REST-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-Vite-61DAFB?logo=react&logoColor=black)
+![Leaflet](https://img.shields.io/badge/Leaflet-mapa-199900?logo=leaflet&logoColor=white)
+![Curso](https://img.shields.io/badge/UTEC-Base%20de%20Datos%20II%20·%202026--2-1f6feb)
+
+<img src="documents/visual_spatial/knn_desktop.png" alt="Interfaz del MiniGestor con una consulta k-NN sobre el mapa de Lima" width="860">
+
+</div>
+
+---
+
+## Qué hace
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**Parte 1 · Relacional**
+
+- Heap File con reutilización de espacio y archivo secuencial con reorganización
+- Índices **B+ agrupado**, **B+ no agrupado** y **hash extensible**
+- Índices secundarios con `CREATE INDEX`
+- `ORDER BY`, `GROUP BY` y `JOIN` externos (k-way merge y grace hash join)
+- `WHERE` con `AND`, `OR`, `NOT`, `BETWEEN`, `IN`, `LIKE`, `IS NULL`
+- Varios `JOIN` encadenados con filtros bajados a cada tabla
+- Valores `NULL` con semántica SQL
+- Planificador por costos y `EXPLAIN` / `EXPLAIN ANALYZE` como PostgreSQL
+- Transacciones con bloqueos PS / PU / PX
+
+</td>
+<td width="50%" valign="top">
+
+**Parte 2 · Espacial**
+
+- Tipo `POINT` y un **R-Tree en disco** por cada columna espacial
+- Consultas por **radio**, **k vecinos más cercanos** y **polígono**
+- Distancias **Haversine** (metros) y **Euclidiana**
+- `distancia(...)` e `intersecta(...)` dentro del SQL
+- El planificador elige el R-Tree por costo, también dentro de un `JOIN`
+- Mapa interactivo con los resultados resaltados
+- Visualización de los MBR del R-Tree por nivel
+
+</td>
+</tr>
+</table>
+
+## Inicio rápido
+
+> [!NOTE]
+> Requisitos: Python 3.11+, Node 18+ y [pnpm](https://pnpm.io) 9.
+
+```bash
+pnpm install
+pnpm run setup
+pnpm dev
+```
+
+Abre <http://localhost:5173>. El backend queda en el puerto 8000.
+
+Para tener datos con los que probar, genera los CSV de demo (10 000 filas por tabla) e impórtalos desde el panel **Archivos**:
+
+```bash
+python3 data/generar_demo.py
+```
+
+La guía completa, con la configuración recomendada para cada tabla, está en [Instalación y primeros pasos](docs/01-instalacion.md).
+
+## Una muestra del SQL
+
+```sql
+CREATE INDEX idx_pedidos_estado ON pedidos (estado) USING BPLUS;
+
+EXPLAIN ANALYZE
+SELECT t.distrito, COUNT(*), SUM(p.total)
+FROM clientes c
+JOIN pedidos p ON c.id = p.cliente_id
+JOIN tiendas t ON p.tienda_id = t.id
+WHERE p.estado = 'entregado'
+  AND c.edad BETWEEN 25 AND 60
+  AND distancia(t.ubicacion, mi_ubicacion) < 8000
+GROUP BY t.distrito
+ORDER BY t.distrito;
+```
+
+Cada tabla entra al `JOIN` por su mejor camino: `clientes` con un scan filtrado, `pedidos` con el índice secundario y `tiendas` con el R-Tree. La referencia completa está en [SQL](docs/02-sql.md).
+
+## Arquitectura
+
+```mermaid
+flowchart LR
+    UI["Frontend<br/>React + Leaflet"] -->|HTTP| API["API REST<br/>FastAPI"]
+    API --> P["Parser<br/>scanner + AST"]
+    P --> PL["Planificador<br/>costos y estadísticas"]
+    PL --> EX["Ejecutor<br/>iteradores instrumentados"]
+    EX --> TX["Transacciones<br/>PS / PU / PX"]
+    EX --> CAT["Catálogo<br/>StorageTable"]
+    CAT --> ST["Heap File<br/>Secuencial"]
+    CAT --> IX["B+ · Hash<br/>R-Tree"]
+    EX --> ALG["Sort · Group By<br/>Join externos"]
+    ST --> D[("Disco<br/>páginas fijas")]
+    IX --> D
+    ALG --> D
+```
+
+## Documentación
+
+| | Página | De qué trata |
+|---|---|---|
+| 🚀 | [Instalación y primeros pasos](docs/01-instalacion.md) | Requisitos, comandos, datos de demo y problemas comunes |
+| 📝 | [SQL](docs/02-sql.md) | Referencia de todas las sentencias con ejemplos |
+| 🧱 | [Arquitectura](docs/03-arquitectura.md) | Capas, recorrido de una consulta y estructura del repositorio |
+| 💾 | [Almacenamiento](docs/04-almacenamiento.md) | Heap File, archivo secuencial y formato de registro |
+| 🌳 | [Índices](docs/05-indices.md) | B+, hash extensible, índices secundarios y R-Tree |
+| 🧠 | [Planificador y EXPLAIN](docs/06-planificador.md) | Modelo de costos, elección de índices, JOINs y algoritmos externos |
+| 🔒 | [Transacciones](docs/07-transacciones.md) | Bloqueos, 2PL estricto y la simulación con hilos |
+| 🗺️ | [Consultas espaciales](docs/08-espacial.md) | `POINT`, R-Tree, radio, k-NN, polígonos y métricas |
+| 🖥️ | [Interfaz](docs/09-interfaz.md) | Recorrido por los paneles de la aplicación |
+| ✅ | [Pruebas](docs/10-pruebas.md) | Cómo ejecutar las pruebas y qué cubren |
+| ⚠️ | [Alcance y limitaciones](docs/11-limitaciones.md) | Lo que el sistema no hace |
+| 📊 | [Benchmarks](benchmarks/README.md) | Comparación experimental de técnicas y resultados |
+
+## Estructura del repositorio
 
 ```
 Proyecto_BD2/
 ├── backend/
-│   ├── engine/
-│   │   ├── storage/
-│   │   │   ├── heap/            heapfile.py
-│   │   │   └── sequential/      sequential_file.py
-│   │   ├── hashing/            indice extendible + external hashing (group by / join)
-│   │   ├── parser/             scanner, parser y ejecutor SQL
-│   │   ├── transactions/       transacciones y control de concurrencia
-│   │   └── common/             contrato compartido (RID, record, page)
-│   ├── api/                    API REST (FastAPI)
-│   └── requirements.txt
-├── frontend/                   interfaz (React + Vite)
-├── data/                       generador de datos y archivos generados (ignorados por git)
-└── README.md
+│   ├── api/                 API REST (FastAPI)
+│   └── engine/
+│       ├── storage/         Heap File y archivo secuencial
+│       ├── bplus/           B+ no agrupado y agrupado
+│       ├── hashing/         hash extensible y algoritmos externos por hash
+│       ├── external/        ordenamiento externo
+│       ├── parser/          scanner, parser, AST y ejecutor
+│       ├── plan/            planificador, costos, nodos y EXPLAIN
+│       ├── transactions/    transacciones y bloqueos
+│       ├── rtree.py         R-Tree en disco
+│       └── catalog.py       tablas, índices y estadísticas
+├── frontend/                interfaz (React + Vite + Leaflet)
+├── benchmarks/              notebook, script espacial y resultados
+├── data/                    generadores de datos
+└── docs/                    esta documentación
 ```
 
-## Desarrollo con un comando (pnpm)
+---
 
-```
-pnpm install    # instala concurrently (raíz)
-pnpm run setup  # solo 1ra vez: crea backend/.venv, instala requirements y deps del frontend
-pnpm dev        # levanta backend (8000) + frontend (5173) juntos
-```
-
-`pnpm dev` usa el binario del venv directo (`backend/.venv/bin/uvicorn`),
-sin necesidad de activarlo. El puerto del backend debe seguir en 8000
-porque `frontend/vite.config.js` proxea `/api` hacia ahí.
-
-## Backend
-
-Por separado (equivale a `pnpm dev:backend`):
-
-```
-cd backend
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn api.main:app --reload
-```
-
-API en http://localhost:8000 (health: `/api/health`, demo: `/api/hashing/demo`).
-
-Demo del motor de hashing sin servidor:
-
-```
-cd backend
-python -m engine.hashing.demo
-```
-
-## Transacciones y control de concurrencia
-
-El módulo `backend/engine/transactions/` administra el ciclo de vida de las
-transacciones y evita que dos operaciones modifiquen al mismo tiempo un mismo
-recurso. El desarrollo se organizó en los siguientes avances.
-
-### 1. Contexto transaccional
-
-Una transacción representa una secuencia de operaciones que debe conservar un
-estado consistente. La clase `Transaction` almacena:
-
-- `transaction_id`: identifica de forma única a la transacción.
-- `thread_id`: relaciona la transacción con el hilo que la está ejecutando.
-- `state`: indica si la transacción está activa (`ACTIVE`) o terminó (`ENDED`).
-
-`TransactionManager.begin()` crea la transacción y la registra usando el
-identificador del hilo actual. Esto permite que varios hilos trabajen con el
-mismo administrador, pero cada uno encuentre únicamente su propia transacción.
-No se permite iniciar una segunda transacción activa en el mismo hilo.
-
-### 2. Bloqueos exclusivos por recurso
-
-`Resource` identifica aquello que se desea proteger. Un recurso puede
-representar una tabla o una página mediante su tipo, nombre e identificador.
-
-`LockManager` mantiene qué transacción es propietaria de cada recurso. El
-bloqueo es exclusivo: mientras una transacción lo posee, las demás deben
-esperar. La espera se coordina con `threading.Condition` y tiene un tiempo
-máximo para evitar que un hilo espere indefinidamente.
-
-Los eventos `WAIT`, `ACQUIRED` y `RELEASED` permiten observar cuándo una
-transacción esperó, obtuvo o liberó un recurso.
-
-### 3. Retención de bloqueos hasta END TRANSACTION
-
-Los bloqueos obtenidos por una transacción se mantienen durante todas sus
-operaciones. `TransactionManager.end()` libera todos sus recursos mediante
-`release_all()`, cambia su estado a `ENDED` y elimina su relación con el hilo.
-
-Este comportamiento corresponde a la idea principal del protocolo 2PL
-estricto: los bloqueos exclusivos no se liberan antes de finalizar la
-transacción. De esta manera, otra transacción no puede observar ni sobrescribir
-un recurso mientras la primera todavía está trabajando con él.
-
-### 4. Conexión de BEGIN y END TRANSACTION con el ejecutor
-
-El ejecutor SQL utiliza una instancia de `TransactionManager` para conectar
-las sentencias del parser con el control de concurrencia:
-
-1. `BEGIN TRANSACTION` llama a `begin()`.
-2. `SELECT`, `INSERT` y `DELETE` solicitan un bloqueo sobre la tabla cuando hay
-   una transacción activa.
-3. Si otra transacción posee la tabla, la operación espera.
-4. `END TRANSACTION` llama a `end()` y libera los bloqueos retenidos.
-
-Las operaciones ejecutadas fuera de una transacción explícita conservan el
-comportamiento normal del ejecutor y no solicitan estos bloqueos.
-
-### 5. Evidencia de ejecución simultánea
-
-`demo.py` compara dos ejecuciones sobre un valor inicial de `100`. Un hilo suma
-`50` y otro resta `30`.
-
-Sin bloqueo, ambos hilos leen el mismo valor inicial y una escritura reemplaza
-a la otra. El resultado es `70`, aunque el resultado correcto debería ser
-`120`. Este problema se conoce como actualización perdida.
-
-Con bloqueo exclusivo, la segunda transacción espera a que la primera termine.
-Luego lee el valor actualizado y el resultado final es `120`.
-
-La demostración se ejecuta desde `backend/`:
-
-```
-python -m engine.transactions.demo
-```
-
-La salida permite comprobar:
-
-```
-Escenario sin bloqueos
-Resultado esperado: 120
-Resultado obtenido: 70
-Actualización perdida: True
-
-Escenario con bloqueos
-Resultado esperado: 120
-Resultado obtenido: 120
-Espera detectada: True
-```
-
-### Flujo completo
-
-```
-BEGIN TRANSACTION
-        |
-        v
-crear Transaction y asociarla al hilo
-        |
-        v
-solicitar bloqueo del recurso
-        |
-        +---- ocupado ----> esperar
-        |                     |
-        <---------------------+
-        |
-        v
-ejecutar SELECT, INSERT o DELETE
-        |
-        v
-END TRANSACTION
-        |
-        v
-liberar recursos y finalizar la transacción
-```
-
-### Capacidades y límites actuales
-
-La implementación permite:
-
-- Mantener una transacción activa diferente por hilo.
-- Asignar identificadores independientes a las transacciones.
-- Aplicar bloqueos exclusivos a tablas o páginas.
-- Hacer esperar a una transacción cuando el recurso está ocupado.
-- Liberar todos los bloqueos al finalizar la transacción.
-- Detectar secuencias inválidas de `BEGIN` y `END`.
-- Detectar una espera que supera el tiempo máximo.
-
-En esta etapa no se implementan `ROLLBACK`, detección de deadlocks, bloqueos
-compartidos ni niveles de aislamiento configurables.
-
-## Frontend
-
-Por separado (equivale a `pnpm dev:frontend`):
-
-```
-cd frontend
-npm install
-npm run dev
-```
-
-Interfaz en http://localhost:5173 (proxy `/api` hacia el backend en el puerto 8000).
-
-## Datos para benchmarks
-
-```
-python data/generate_data.py
-```
-
-Genera `records_N.csv` (`id,category,value`) y `details_N.csv`
-(`id,record_id,value`) en `data/generated/` para N = 1 000, 10 000 y
-100 000. Cada detalle referencia un registro; hay dos detalles por registro.
-La semilla predeterminada es 2026. Se pueden cambiar los tamaños, la semilla
-y la ruta con `--sizes`, `--seed` y `--output-dir`.
-
-El borrador del análisis está en `benchmarks/benchmark.ipynb`; sus mediciones
-están desactivadas hasta conectar las estructuras restantes.
+<div align="center">
+Proyecto del curso <b>Base de Datos II</b> · Universidad de Ingeniería y Tecnología (UTEC) · 2026-2
+</div>

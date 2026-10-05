@@ -11,3 +11,4 @@ data/*
 *.buk
 *.dir
 backend/.venv
+!data/generar_demo.py
