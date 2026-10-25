@@ -1,6 +1,21 @@
 # 🚀 Instalación y primeros pasos
 
-## Requisitos
+## Con Docker (recomendado)
+
+Solo necesitas [Docker](https://docs.docker.com/get-docker/) con Compose. Desde la raíz del repositorio:
+
+```bash
+docker compose up --build
+```
+
+- Abre <http://localhost:8080>. nginx sirve el frontend y reenvía `/api` al backend.
+- La primera vez, el backend genera los CSV de demo en `data/demo/` de tu máquina. Impórtalos desde el panel **Archivos** (ver [Datos de demo](#datos-de-demo)).
+- Las tablas se guardan en el volumen `runtime` y sobreviven a `docker compose down`. Para empezar de cero: `docker compose down -v`.
+- Si cambias el código, vuelve a correr `docker compose up --build`.
+
+## Desarrollo sin Docker
+
+### Requisitos
 
 | Herramienta | Versión |
 |---|---|
@@ -8,7 +23,7 @@
 | Node.js | 18 o superior |
 | pnpm | 9 (`corepack enable` lo instala) |
 
-## Levantar todo con un comando
+### Levantar todo con un comando
 
 ```bash
 pnpm install
