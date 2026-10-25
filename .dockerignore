@@ -1,0 +1,11 @@
+.git
+node_modules
+frontend
+benchmarks
+documents
+docs
+data/runtime
+data/demo
+**/.venv
+**/__pycache__
+*.pdf
