@@ -55,6 +55,16 @@ Archivos paginados · índices B+, hash y R-Tree · SQL con planificador por cos
 
 ## Inicio rápido
 
+Con [Docker](https://docs.docker.com/get-docker/) basta un comando:
+
+```bash
+docker compose up --build
+```
+
+Abre <http://localhost:8080>. Los CSV de demo se generan solos en `data/demo/`; impórtalos desde el panel **Archivos**.
+
+Para desarrollo sin Docker:
+
 > [!NOTE]
 > Requisitos: Python 3.11+, Node 18+ y [pnpm](https://pnpm.io) 9.
 
