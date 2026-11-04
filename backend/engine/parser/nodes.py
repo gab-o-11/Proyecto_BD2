@@ -36,6 +36,18 @@ class SimilarTo(Node):
     k: int
 
 
+def contains_similar(condition):
+    if isinstance(condition, SimilarTo):
+        return True
+    if isinstance(condition, (And, Or)):
+        for parte in condition.conditions:
+            if contains_similar(parte):
+                return True
+    if isinstance(condition, Not):
+        return contains_similar(condition.condition)
+    return False
+
+
 def expression_columns(expression):
     if isinstance(expression, Distance):
         return [operand for operand in (expression.left, expression.right) if isinstance(operand, str)]
@@ -125,6 +137,8 @@ class Select(Node):
     joins: List["Join"] = field(default_factory=list)
     projection: Optional[List[str]] = None
     limit: Optional[int] = None
+    index_method: Optional[str] = None
+    search_options: tuple = ()
 
 
 def aggregate_name(function, column):

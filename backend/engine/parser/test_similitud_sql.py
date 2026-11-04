@@ -40,8 +40,36 @@ def _similar_to():
         _rechaza(sql)
 
 
+def _using():
+    nodo = _ida_y_vuelta("SELECT * FROM imagenes WHERE SIMILAR_TO('q.jpg', k=10) USING HNSW WITH METRIC=cosine;")
+    assert nodo.index_method == "HNSW" and nodo.search_options == (("METRIC", "cosine"),)
+    nodo = _ida_y_vuelta("SELECT * FROM c WHERE SIMILAR_TO('q.mp3', k=5) using ivf with metric=EUCLIDEAN, probes=8 ORDER BY id DESC LIMIT 3;")
+    assert nodo.index_method == "IVF" and nodo.search_options == (("METRIC", "euclidean"), ("PROBES", 8))
+    assert nodo.order_by == "id" and nodo.limit == 3
+    nodo = _ida_y_vuelta("SELECT * FROM c WHERE SIMILAR_TO('q', k=5) USING SEQ;")
+    assert nodo.index_method == "SEQ" and nodo.search_options == ()
+    nodo = _ida_y_vuelta("SELECT * FROM c WHERE SIMILAR_TO('q', k=5) USING HNSW WITH EF_SEARCH=100, METRIC=dot;")
+    assert nodo.search_options == (("EF_SEARCH", 100), ("METRIC", "dot"))
+    assert _parse("SELECT * FROM c WHERE SIMILAR_TO('q', k=5);")[0].index_method is None
+    for sql in [
+        "SELECT * FROM t USING HNSW",
+        "SELECT * FROM t WHERE id = 1 USING HNSW",
+        "SELECT * FROM t WHERE SIMILAR_TO('q', k=5) USING BPLUS",
+        "SELECT * FROM t WHERE SIMILAR_TO('q', k=5) USING",
+        "SELECT * FROM t WHERE SIMILAR_TO('q', k=5) USING HNSW WITH",
+        "SELECT * FROM t WHERE SIMILAR_TO('q', k=5) USING HNSW WITH METRIC=manhattan",
+        "SELECT * FROM t WHERE SIMILAR_TO('q', k=5) USING HNSW WITH METRIC=3",
+        "SELECT * FROM t WHERE SIMILAR_TO('q', k=5) USING HNSW WITH EF_SEARCH=0",
+        "SELECT * FROM t WHERE SIMILAR_TO('q', k=5) USING HNSW WITH EF_SEARCH=cosine",
+        "SELECT * FROM t WHERE SIMILAR_TO('q', k=5) USING HNSW WITH OTRA=1",
+        "SELECT * FROM t WHERE SIMILAR_TO('q', k=5) USING HNSW WITH METRIC=dot, METRIC=cosine",
+    ]:
+        _rechaza(sql)
+
+
 def main():
     _similar_to()
+    _using()
     print("OK: SQL de similitud")
 
 

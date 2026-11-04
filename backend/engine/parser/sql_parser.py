@@ -2,7 +2,8 @@ import math
 import sys
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import Analyze, And, BeginTransaction, Between, ColumnDef, ColumnRef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, SimilarTo, Update, aggregate_name
+from .nodes import Analyze, And, BeginTransaction, Between, ColumnDef, ColumnRef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, SimilarTo, Update, aggregate_name, contains_similar
+from ..vectorial.metricas import METRICAS
 
 
 class ParseError(Exception):
@@ -24,6 +25,10 @@ AGGREGATE_FUNCS = ("COUNT", "SUM", "AVG", "MIN", "MAX")
 INDEX_KINDS = ("HASH", "BPLUS", "BPLUS_CLUSTERED")
 
 SECONDARY_KINDS = ("HASH", "BPLUS")
+
+SEARCH_METHODS = ("IVF", "HNSW", "SEQ")
+
+SEARCH_OPTIONS = ("METRIC", "PROBES", "EF_SEARCH")
 
 class Parser:
     def __init__(self, scanner: Scanner):
@@ -143,6 +148,13 @@ class Parser:
         if self._match(TokenType.WHERE):
             condicion = self._condition()
 
+        metodo = None
+        opciones = ()
+        if self._match(TokenType.USING):
+            if not contains_similar(condicion):
+                raise ParseError(f"Línea {self.previous.line}: USING en SELECT requiere SIMILAR_TO en WHERE")
+            metodo, opciones = self._busqueda()
+
         group_by = None
         if self._match(TokenType.GROUP):
             self._expect(TokenType.BY, "BY")
@@ -169,7 +181,47 @@ class Parser:
                 raise ParseError(f"Línea {token.line}: LIMIT debe ser un entero entre 0 y {sys.maxsize}")
 
         return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by,
-                      aggregates=agregados, order_desc=order_desc, table_alias=alias, joins=joins, projection=projection, limit=limit)
+                      aggregates=agregados, order_desc=order_desc, table_alias=alias, joins=joins, projection=projection, limit=limit,
+                      index_method=metodo, search_options=opciones)
+
+    def _busqueda(self):
+        token = self._expect(TokenType.IDENTIFIER, "método de búsqueda (IVF, HNSW o SEQ)")
+        metodo = token.lexeme.upper()
+        if metodo not in SEARCH_METHODS:
+            raise ParseError(f"Línea {token.line}: método de búsqueda desconocido '{token.lexeme}'")
+        opciones = ()
+        if self._match(TokenType.WITH):
+            opciones = self._opciones(SEARCH_OPTIONS)
+        return metodo, opciones
+
+    def _opciones(self, validas):
+        opciones = [self._opcion(validas)]
+        while self._match(TokenType.COMMA):
+            opciones.append(self._opcion(validas))
+        vistas = set()
+        for nombre, _ in opciones:
+            if nombre in vistas:
+                raise ParseError(f"Línea {self.previous.line}: la opción '{nombre}' está repetida")
+            vistas.add(nombre)
+        return tuple(opciones)
+
+    def _opcion(self, validas):
+        token = self._expect(TokenType.IDENTIFIER, "nombre de opción")
+        nombre = token.lexeme.upper()
+        if nombre not in validas:
+            raise ParseError(f"Línea {token.line}: opción desconocida '{token.lexeme}'")
+        self._expect(TokenType.EQUAL, "'=' en la opción")
+        if nombre == "METRIC":
+            token = self._expect(TokenType.IDENTIFIER, "métrica (euclidean, cosine o dot)")
+            metrica = token.lexeme.lower()
+            if metrica not in METRICAS:
+                raise ParseError(f"Línea {token.line}: métrica desconocida '{token.lexeme}'")
+            return nombre, metrica
+        token = self._expect(TokenType.INT, f"entero positivo para {nombre}")
+        valor = int(token.lexeme)
+        if not 1 <= valor <= sys.maxsize:
+            raise ParseError(f"Línea {token.line}: {nombre} debe ser un entero positivo")
+        return nombre, valor
 
     def _expression(self):
         nombre = self._column_name()

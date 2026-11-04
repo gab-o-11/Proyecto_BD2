@@ -60,6 +60,8 @@ class PrintVisitor(Visitor):
 
         if node.where is not None:
             sql += " WHERE " + node.where.accept(self)
+        if node.index_method is not None:
+            sql += f" USING {node.index_method}" + self._opciones(node.search_options)
         if node.group_by is not None:
             sql += f" GROUP BY {node.group_by}"
         if node.order_by is not None:
@@ -70,6 +72,15 @@ class PrintVisitor(Visitor):
         if node.limit is not None:
             sql += f" LIMIT {node.limit}"
         return sql
+
+    @staticmethod
+    def _opciones(opciones):
+        if not opciones:
+            return ""
+        partes = []
+        for nombre, valor in opciones:
+            partes.append(f"{nombre}={valor}")
+        return " WITH " + ", ".join(partes)
 
     def visit_Insert(self, node):
         filas = ", ".join("(" + ", ".join(self._literal(v) for v in fila) + ")" for fila in node.all_values())

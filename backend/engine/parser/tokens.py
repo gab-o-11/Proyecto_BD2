@@ -22,6 +22,7 @@ class TokenType(Enum):
     TRANSACTION = auto()
     END = auto()
     USING = auto()
+    WITH = auto()
     EXPLAIN = auto()
     ANALYZE = auto()
     JOIN = auto()
@@ -109,6 +110,7 @@ KEYWORDS = {
     "TRANSACTION": TokenType.TRANSACTION,
     "END": TokenType.END,
     "USING": TokenType.USING,
+    "WITH": TokenType.WITH,
     "EXPLAIN": TokenType.EXPLAIN,
     "ANALYZE": TokenType.ANALYZE,
     "FLOAT": TokenType.FLOAT_TYPE,
