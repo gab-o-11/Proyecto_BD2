@@ -234,6 +234,46 @@ def _hnsw():
         assert IndiceHNSW(vacio, COSINE).m_max0 == 32
 
 
+def _hnsw_mantenimiento():
+    datos = _vectores(600, 8)
+    with tempfile.TemporaryDirectory(prefix="test_vectorial_") as carpeta:
+        almacen = _cargar_almacen(carpeta, datos, "hnsw_m")
+        indice = IndiceHNSW(almacen, COSINE)
+        indice.construir()
+        assert 3 in {i for _, i in indice.buscar(datos[3], 5, ef_search=100)}
+        almacen.borrar(almacen.rid(3))
+        indice.borrar(3)
+        assert 3 not in {i for _, i in indice.buscar(datos[3], 5, ef_search=100)}
+        assert len(indice.buscar(datos[3], 5, ef_search=100)) == 5
+        nuevo = almacen.agregar(datos[3] * 3, (2, 0))
+        indice.insertar(nuevo)
+        assert nuevo == indice.buscar(datos[3], 1, ef_search=100)[0][1]
+        ruta = os.path.join(carpeta, "indice.hnsw")
+        indice.guardar(ruta)
+        assert not os.path.exists(ruta + ".tmp")
+        antes = indice.buscar(datos[7], 10, ef_search=50)
+        posterior = almacen.agregar(datos[8] * 2, (2, 1))
+        reabierto = IndiceHNSW.abrir(almacen, ruta)
+        assert reabierto.metrica == COSINE and reabierto.m == 16 and reabierto.ef_construccion == 64
+        assert reabierto.vecinos[0] == indice.vecinos[0] and posterior in reabierto.vecinos
+        assert reabierto.nivel_maximo >= indice.nivel_maximo
+        ids_antes = set()
+        for _, identificador in antes:
+            ids_antes.add(identificador)
+        ids_despues = set()
+        for _, identificador in reabierto.buscar(datos[7], 10, ef_search=50):
+            ids_despues.add(identificador)
+        assert ids_despues == ids_antes
+        assert 3 not in {i for _, i in reabierto.buscar(datos[3], 5, ef_search=100)}
+        for identificador in almacen.ids_vivos().tolist():
+            almacen.borrar(almacen.rid(identificador))
+        assert reabierto.buscar(datos[0], 5) == []
+        sin_datos = IndiceHNSW(AlmacenVectores(os.path.join(carpeta, "vacio_m"), 8), EUCLIDEAN)
+        ruta_vacia = os.path.join(carpeta, "vacio.hnsw")
+        sin_datos.guardar(ruta_vacia)
+        assert IndiceHNSW.abrir(sin_datos.almacen, ruta_vacia).entrada is None
+
+
 def main():
     _metricas()
     _exacta()
@@ -242,7 +282,8 @@ def main():
     _ivf()
     _ivf_mantenimiento()
     _hnsw()
-    print("OK: métricas, búsqueda exacta, almacén de vectores, k-means, IVF, mantenimiento de IVF, HNSW")
+    _hnsw_mantenimiento()
+    print("OK: métricas, búsqueda exacta, almacén de vectores, k-means, IVF, mantenimiento de IVF, HNSW, mantenimiento de HNSW")
 
 
 if __name__ == "__main__":

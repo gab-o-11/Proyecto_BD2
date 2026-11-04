@@ -1,5 +1,6 @@
 import heapq
 import math
+import os
 import random
 
 import numpy as np
@@ -38,7 +39,7 @@ class IndiceHNSW:
             return self.m_max0
         return self.m_max
 
-    def _explorar(self, consulta, entradas, ef, capa):
+    def _explorar(self, consulta, entradas, ef, capa, vivos=None):
         matriz = self.almacen.matriz()
         visitados = np.zeros(self.almacen.total, dtype=bool)
         visitados[entradas] = True
@@ -47,7 +48,8 @@ class IndiceHNSW:
         resultados = []
         for valor, identificador in zip(valores, entradas):
             heapq.heappush(candidatos, (valor, identificador))
-            heapq.heappush(resultados, (-valor, identificador))
+            if vivos is None or vivos[identificador]:
+                heapq.heappush(resultados, (-valor, identificador))
         while candidatos:
             valor, actual = heapq.heappop(candidatos)
             if len(resultados) >= ef and valor > -resultados[0][0]:
@@ -64,9 +66,10 @@ class IndiceHNSW:
             for valor_nuevo, identificador in zip(valores, nuevos.tolist()):
                 if len(resultados) < ef or valor_nuevo < -resultados[0][0]:
                     heapq.heappush(candidatos, (valor_nuevo, identificador))
-                    heapq.heappush(resultados, (-valor_nuevo, identificador))
-                    if len(resultados) > ef:
-                        heapq.heappop(resultados)
+                    if vivos is None or vivos[identificador]:
+                        heapq.heappush(resultados, (-valor_nuevo, identificador))
+                        if len(resultados) > ef:
+                            heapq.heappop(resultados)
         ordenados = []
         for valor, identificador in resultados:
             ordenados.append((-valor, identificador))
@@ -156,4 +159,61 @@ class IndiceHNSW:
         if self.entrada is None:
             return []
         entrada = self._descender(consulta, self.entrada, self.nivel_maximo, 0)
-        return self._explorar(consulta, [entrada], max(ef_search, k), 0)[:k]
+        vivos = self.almacen.mascara_vivos()
+        return self._explorar(consulta, [entrada], max(ef_search, k), 0, vivos)[:k]
+
+    def borrar(self, identificador):
+        return
+
+    def sincronizar(self):
+        for identificador in self.almacen.ids_vivos().tolist():
+            self.insertar(identificador)
+
+    def guardar(self, ruta):
+        ids = []
+        capas = []
+        longitudes = []
+        planos = []
+        for identificador, listas in self.vecinos.items():
+            ids.append(identificador)
+            capas.append(len(listas))
+            for lista in listas:
+                longitudes.append(len(lista))
+                planos.extend(lista)
+        temporal = ruta + ".tmp"
+        with open(temporal, "wb") as archivo:
+            np.savez(
+                archivo,
+                ids=np.array(ids, dtype=np.int64),
+                capas=np.array(capas, dtype=np.int64),
+                longitudes=np.array(longitudes, dtype=np.int64),
+                vecinos=np.array(planos, dtype=np.int64),
+                parametros=np.array([self.m, self.ef_construccion, self.semilla, self.nivel_maximo, -1 if self.entrada is None else self.entrada]),
+                metrica=np.array(self.metrica),
+            )
+        os.replace(temporal, ruta)
+
+    @classmethod
+    def abrir(cls, almacen, ruta):
+        with np.load(ruta) as datos:
+            m, ef_construccion, semilla, nivel_maximo, entrada = datos["parametros"].tolist()
+            indice = cls(almacen, str(datos["metrica"]), m, ef_construccion, semilla + almacen.total)
+            ids = datos["ids"].tolist()
+            capas = datos["capas"].tolist()
+            longitudes = datos["longitudes"].tolist()
+            planos = datos["vecinos"].tolist()
+        indice.nivel_maximo = nivel_maximo
+        if entrada >= 0:
+            indice.entrada = entrada
+        posicion_capa = 0
+        posicion_vecino = 0
+        for identificador, cantidad in zip(ids, capas):
+            listas = []
+            for _ in range(cantidad):
+                longitud = longitudes[posicion_capa]
+                listas.append(planos[posicion_vecino:posicion_vecino + longitud])
+                posicion_capa += 1
+                posicion_vecino += longitud
+            indice.vecinos[identificador] = listas
+        indice.sincronizar()
+        return indice
