@@ -151,13 +151,49 @@ def _ivf():
         _falla(lambda: IndiceIVF(vacio, "manhattan"), "métrica desconocida")
 
 
+def _ivf_mantenimiento():
+    datos = _vectores(800, 8)
+    with tempfile.TemporaryDirectory(prefix="test_vectorial_") as carpeta:
+        almacen = _cargar_almacen(carpeta, datos)
+        indice = IndiceIVF(almacen, COSINE)
+        _falla(lambda: indice.insertar(0), "insertar sin construir")
+        indice.construir()
+        todas = indice.lists
+        nuevo = almacen.agregar(datos[3] * 2, (2, 0))
+        indice.insertar(nuevo)
+        indice.insertar(nuevo)
+        assert sum(len(lista) for lista in indice.listas) == 801
+        assert nuevo in {i for _, i in indice.buscar(datos[3], 3, probes=todas)}
+        rid = almacen.rid(3)
+        almacen.borrar(rid)
+        indice.borrar(3)
+        indice.borrar(3)
+        assert sum(len(lista) for lista in indice.listas) == 800
+        assert 3 not in {i for _, i in indice.buscar(datos[3], 5, probes=todas)}
+        almacen.borrar(almacen.rid(4))
+        assert 4 not in {i for _, i in indice.buscar(datos[4], 5, probes=todas)}
+        ruta = os.path.join(carpeta, "indice.ivf")
+        indice.guardar(ruta)
+        posterior = almacen.agregar(datos[9], (2, 1))
+        almacen.borrar(almacen.rid(10))
+        reabierto = IndiceIVF.abrir(almacen, ruta)
+        assert reabierto.metrica == COSINE and reabierto.lists == todas
+        assert posterior in reabierto.lista_de and 10 not in reabierto.lista_de and 4 not in reabierto.lista_de
+        vivos = almacen.ids_vivos()
+        for q in datos[:10]:
+            assert reabierto.buscar(q, 7, probes=todas) == knn_exacto(q, almacen.matriz(), 7, COSINE, vivos)
+        assert sorted(reabierto.lista_de) == vivos.tolist()
+        assert os.path.exists(ruta) and not os.path.exists(ruta + ".tmp")
+
+
 def main():
     _metricas()
     _exacta()
     _almacen()
     _kmeans()
     _ivf()
-    print("OK: métricas, búsqueda exacta, almacén de vectores, k-means, IVF")
+    _ivf_mantenimiento()
+    print("OK: métricas, búsqueda exacta, almacén de vectores, k-means, IVF, mantenimiento de IVF")
 
 
 if __name__ == "__main__":

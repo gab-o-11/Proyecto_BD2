@@ -7,7 +7,7 @@ TOLERANCIA = 1e-4
 TAMANO_LOTE = 2048
 
 
-def _asignar(matriz, centroides, metrica):
+def asignar(matriz, centroides, metrica):
     asignaciones = np.empty(len(matriz), dtype=np.int64)
     distancia_propia = np.empty(len(matriz), dtype=np.float32)
     if metrica == COSINE:
@@ -43,7 +43,7 @@ def kmeans(matriz, k, metrica=EUCLIDEAN, iteraciones=ITERACIONES, tolerancia=TOL
     centroides = matriz[azar.choice(len(matriz), k, replace=False)].copy()
     asignaciones = None
     for _ in range(iteraciones):
-        nuevas, propias = _asignar(matriz, centroides, metrica)
+        nuevas, propias = asignar(matriz, centroides, metrica)
         if asignaciones is not None and np.array_equal(nuevas, asignaciones):
             break
         asignaciones = nuevas
@@ -59,7 +59,7 @@ def kmeans(matriz, k, metrica=EUCLIDEAN, iteraciones=ITERACIONES, tolerancia=TOL
             centroides[vacios] = matriz[lejanos]
         elif np.linalg.norm(centroides - anteriores, axis=1).max() <= tolerancia:
             break
-    asignaciones, _ = _asignar(matriz, centroides, metrica)
+    asignaciones, _ = asignar(matriz, centroides, metrica)
     return centroides, asignaciones
 
 
