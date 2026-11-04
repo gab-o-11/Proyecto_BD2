@@ -25,7 +25,11 @@ def knn_exacto(consulta, matriz, k, metrica, ids=None):
                 heapq.heappush(mejores, par)
             elif par > mejores[0]:
                 heapq.heapreplace(mejores, par)
-    return sorted((-valor, -identificador) for valor, identificador in mejores)
+    resultado = []
+    for valor, identificador in mejores:
+        resultado.append((-valor, -identificador))
+    resultado.sort()
+    return resultado
 
 
 def recall_at_k(exactos, aproximados):

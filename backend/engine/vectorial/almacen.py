@@ -75,8 +75,12 @@ class AlmacenVectores:
         return identificador
 
     def agregar_lote(self, vectores, rids):
-        vectores = [self._validar(vector) for vector in vectores]
-        identificadores = [self._escribir(vector, rid) for vector, rid in zip(vectores, rids)]
+        validados = []
+        for vector in vectores:
+            validados.append(self._validar(vector))
+        identificadores = []
+        for vector, rid in zip(validados, rids):
+            identificadores.append(self._escribir(vector, rid))
         self._guardar_meta()
         return identificadores
 

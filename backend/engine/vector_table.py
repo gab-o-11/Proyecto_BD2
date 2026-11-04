@@ -67,24 +67,42 @@ class VectorTable:
             return list(self.columns)
         return list(self.column_definitions)
 
+    def _indices_de(self, columna):
+        indices = []
+        for indice in self.indices_vectoriales.values():
+            if indice.columna == columna:
+                indices.append(indice)
+        return indices
+
+    def _vector_agregar(self, columna, vector, rid):
+        identificador = self.almacenes[columna].agregar(vector, rid)
+        for indice in self._indices_de(columna):
+            indice.estructura.insertar(identificador)
+
+    def _vector_quitar(self, columna, rid):
+        identificador = self.almacenes[columna].borrar(rid)
+        if identificador is None:
+            return
+        for indice in self._indices_de(columna):
+            indice.estructura.borrar(identificador)
+
     def _vector_insert(self, row, rid):
-        for columna, almacen in self.almacenes.items():
+        for columna in self.almacenes:
             vector = row.get(columna)
             if vector is not None:
-                almacen.agregar(vector, rid)
+                self._vector_agregar(columna, vector, rid)
 
     def _vector_remove(self, row):
-        for almacen in self.almacenes.values():
-            almacen.borrar(row["__rid__"])
+        for columna in self.almacenes:
+            self._vector_quitar(columna, row["__rid__"])
 
     def _vector_update(self, row, asignaciones):
         for columna, valor in asignaciones:
-            almacen = self.almacenes.get(columna)
-            if almacen is None:
+            if columna not in self.almacenes:
                 continue
-            almacen.borrar(row["__rid__"])
+            self._vector_quitar(columna, row["__rid__"])
             if valor is not None:
-                almacen.agregar(valor, row["__rid__"])
+                self._vector_agregar(columna, valor, row["__rid__"])
 
     def crear_indice_vectorial(self, nombre, columna, tipo, opciones):
         indice = IndiceVectorial(self, nombre, columna, tipo, opciones)

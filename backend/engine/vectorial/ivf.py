@@ -59,8 +59,11 @@ class IndiceIVF:
         if probes <= 0:
             raise ValueError("probes debe ser un entero positivo")
         elegidas = centroides_cercanos(consulta, self.centroides, self.metrica, probes)
-        candidatos = [self.listas[i] for i in elegidas.tolist()]
-        ids = np.fromiter((i for lista in candidatos for i in lista), dtype=np.int64)
+        candidatos = []
+        for posicion in elegidas.tolist():
+            for identificador in self.listas[posicion]:
+                candidatos.append(identificador)
+        ids = np.array(candidatos, dtype=np.int64)
         ids = ids[self.almacen.mascara_vivos()[ids]]
         return knn_exacto(consulta, self.almacen.matriz(), k, self.metrica, ids)
 
@@ -89,13 +92,19 @@ class IndiceIVF:
                 self.insertar(identificador)
 
     def guardar(self, ruta):
+        ids = []
+        longitudes = []
+        for lista in self.listas:
+            longitudes.append(len(lista))
+            for identificador in lista:
+                ids.append(identificador)
         temporal = ruta + ".tmp"
         with open(temporal, "wb") as archivo:
             np.savez(
                 archivo,
                 centroides=self.centroides,
-                ids=np.fromiter((i for lista in self.listas for i in lista), dtype=np.int64),
-                longitudes=np.array([len(lista) for lista in self.listas], dtype=np.int64),
+                ids=np.array(ids, dtype=np.int64),
+                longitudes=np.array(longitudes, dtype=np.int64),
                 metrica=np.array(self.metrica),
                 semilla=np.array(self.semilla),
             )
