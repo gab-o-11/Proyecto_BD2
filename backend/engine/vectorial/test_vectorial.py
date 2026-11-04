@@ -7,6 +7,7 @@ import numpy as np
 from .exacta import knn_exacto, recall_at_k
 from .almacen import AlmacenVectores
 from .kmeans import centroides_cercanos, kmeans
+from .ivf import IndiceIVF, lists_por_defecto
 from .metricas import COSINE, DOT, EUCLIDEAN, distancia, distancias, score, validar_metrica
 
 
@@ -119,12 +120,44 @@ def _kmeans():
     _falla(lambda: kmeans(datos, 2, DOT), "producto punto")
 
 
+def _cargar_almacen(carpeta, datos, nombre="t_e"):
+    almacen = AlmacenVectores(os.path.join(carpeta, nombre), datos.shape[1])
+    almacen.agregar_lote(datos, [(1, i) for i in range(len(datos))])
+    return almacen
+
+
+def _ivf():
+    datos = _vectores(2000, 16)
+    consultas = _vectores(40, 16, semilla=9)
+    with tempfile.TemporaryDirectory(prefix="test_vectorial_") as carpeta:
+        for metrica in (EUCLIDEAN, COSINE, DOT):
+            almacen = _cargar_almacen(carpeta, datos, "t_" + metrica)
+            indice = IndiceIVF(almacen, metrica)
+            indice.construir()
+            assert indice.lists == lists_por_defecto(2000) == 45 and indice.probes_por_defecto() == 7
+            assert sum(len(lista) for lista in indice.listas) == 2000
+            exactos = [knn_exacto(q, datos, 10, metrica) for q in consultas]
+            for q, exacto in zip(consultas, exactos):
+                assert indice.buscar(q, 10, probes=indice.lists) == exacto
+            bajo = np.mean([recall_at_k([i for _, i in e], [i for _, i in indice.buscar(q, 10, probes=1)]) for q, e in zip(consultas, exactos)])
+            alto = np.mean([recall_at_k([i for _, i in e], [i for _, i in indice.buscar(q, 10, probes=15)]) for q, e in zip(consultas, exactos)])
+            assert alto >= bajo and alto >= 0.8, (metrica, bajo, alto)
+            assert indice.buscar(consultas[0], 10, probes=9999) == exactos[0]
+            _falla(lambda: indice.buscar(consultas[0], 10, probes=0), "probes no positivo")
+        vacio = AlmacenVectores(os.path.join(carpeta, "vacio"), 16)
+        _falla(IndiceIVF(vacio, COSINE).construir, "tabla sin datos")
+        assert IndiceIVF(vacio, COSINE).buscar(consultas[0], 3) == []
+        _falla(IndiceIVF(_cargar_almacen(carpeta, datos[:5], "pocos"), COSINE, lists=6).construir, "lists mayor que los datos")
+        _falla(lambda: IndiceIVF(vacio, "manhattan"), "métrica desconocida")
+
+
 def main():
     _metricas()
     _exacta()
     _almacen()
     _kmeans()
-    print("OK: métricas, búsqueda exacta, almacén de vectores, k-means")
+    _ivf()
+    print("OK: métricas, búsqueda exacta, almacén de vectores, k-means, IVF")
 
 
 if __name__ == "__main__":
