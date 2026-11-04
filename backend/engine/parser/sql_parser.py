@@ -2,7 +2,7 @@ import math
 import sys
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import DEFAULT_SCORE_COLUMN, Analyze, And, BeginTransaction, Between, ColumnDef, ColumnRef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, SimilarTo, Update, aggregate_name, contains_similar
+from .nodes import DEFAULT_SCORE_COLUMN, Analyze, And, BeginTransaction, Between, ColumnDef, ColumnRef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, SimilarTo, Update, VectorLiteral, aggregate_name, contains_similar
 from ..vectorial.metricas import METRICAS
 
 
@@ -25,6 +25,13 @@ AGGREGATE_FUNCS = ("COUNT", "SUM", "AVG", "MIN", "MAX")
 INDEX_KINDS = ("HASH", "BPLUS", "BPLUS_CLUSTERED")
 
 SECONDARY_KINDS = ("HASH", "BPLUS")
+
+VECTOR_KINDS = ("IVF", "HNSW")
+
+VECTOR_INDEX_OPTIONS = {
+    "IVF": ("METRIC", "LISTS"),
+    "HNSW": ("METRIC", "M", "EF_CONSTRUCTION"),
+}
 
 SEARCH_METHODS = ("IVF", "HNSW", "SEQ")
 
@@ -270,8 +277,11 @@ class Parser:
         return Distance(izquierda, derecha, metrica)
 
     def _similar_to(self):
-        token = self._expect(TokenType.STRING, "archivo de consulta entre comillas")
-        consulta = token.lexeme[1:-1].replace("''", "'")
+        if self._check(TokenType.VECTOR):
+            consulta = self._vector()
+        else:
+            token = self._expect(TokenType.STRING, "archivo de consulta entre comillas o VECTOR(...)")
+            consulta = token.lexeme[1:-1].replace("''", "'")
         self._expect(TokenType.COMMA, "','")
         parametro = self._expect(TokenType.IDENTIFIER, "k=<entero>")
         if parametro.lexeme.lower() != "k":
@@ -283,6 +293,31 @@ class Parser:
             raise ParseError(f"Línea {token.line}: k debe ser un entero positivo")
         self._expect(TokenType.RPAREN, "')'")
         return SimilarTo(consulta, k)
+
+    def _vector(self):
+        self._expect(TokenType.VECTOR, "VECTOR")
+        self._expect(TokenType.LPAREN, "'('")
+        valores = [self._componente()]
+        while self._match(TokenType.COMMA):
+            valores.append(self._componente())
+        self._expect(TokenType.RPAREN, "')'")
+        return VectorLiteral(tuple(valores))
+
+    def _componente(self):
+        if not self._match(TokenType.INT, TokenType.FLOAT):
+            raise ParseError(
+                f"Línea {self.current.line}: se esperaba un número en VECTOR, "
+                f"se encontró {self._encontrado()}"
+            )
+        valor = float(self.previous.lexeme)
+        if not math.isfinite(valor):
+            raise ParseError(f"Línea {self.previous.line}: el componente '{self.previous.lexeme}' debe ser finito")
+        return valor
+
+    def _valor_fila(self):
+        if self._check(TokenType.VECTOR):
+            return self._vector()
+        return self._value()
 
     def _point_operand(self):
         if self._check(TokenType.POINT):
@@ -372,9 +407,9 @@ class Parser:
 
     def _row(self):
         self._expect(TokenType.LPAREN, "'('")
-        valores = [self._value()]
+        valores = [self._valor_fila()]
         while self._match(TokenType.COMMA):
-            valores.append(self._value())
+            valores.append(self._valor_fila())
         self._expect(TokenType.RPAREN, "')'")
         return valores
 
@@ -400,7 +435,7 @@ class Parser:
     def _assignment(self):
         columna = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
         self._expect(TokenType.EQUAL, "'='")
-        return (columna, self._value())
+        return (columna, self._valor_fila())
 
     # create -> CREATE TABLE IDENTIFIER '(' column_def { ',' column_def } ')' [ USING IDENTIFIER ]
     def _create_table(self):
@@ -438,9 +473,16 @@ class Parser:
                     f"Línea {token.line}: un índice secundario no puede ser agrupado; "
                     f"el índice agrupado se define en CREATE TABLE ... USING BPLUS_CLUSTERED"
                 )
-            if tipo not in SECONDARY_KINDS:
+            if tipo not in SECONDARY_KINDS and tipo not in VECTOR_KINDS:
                 raise ParseError(f"Línea {token.line}: tipo de índice desconocido '{token.lexeme}'")
-        return CreateIndex(nombre, tabla, columna, tipo)
+        opciones = ()
+        if self._match(TokenType.WITH):
+            if tipo not in VECTOR_KINDS:
+                raise ParseError(f"Línea {self.previous.line}: WITH solo se admite en índices IVF o HNSW")
+            self._expect(TokenType.LPAREN, "'(' después de WITH")
+            opciones = self._opciones(VECTOR_INDEX_OPTIONS[tipo])
+            self._expect(TokenType.RPAREN, "')'")
+        return CreateIndex(nombre, tabla, columna, tipo, opciones)
 
     def _drop(self):
         if self._match(TokenType.TABLE):
@@ -472,9 +514,17 @@ class Parser:
             tipo, tam = "DATE", None
         elif self._match(TokenType.POINT):
             tipo, tam = "POINT", None
+        elif self._match(TokenType.VECTOR):
+            self._expect(TokenType.LPAREN, "'('")
+            token = self._expect(TokenType.INT, "dimensión de VECTOR")
+            tam = int(token.lexeme)
+            if tam <= 0:
+                raise ParseError(f"Línea {token.line}: la dimensión de VECTOR debe ser positiva")
+            self._expect(TokenType.RPAREN, "')'")
+            tipo = "VECTOR"
         else:
             raise ParseError(
-                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR, DATE o POINT), "
+                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR, DATE, POINT o VECTOR), "
                 f"se encontró {self._encontrado()}"
             )
         primary_key, not_null = self._column_constraints()

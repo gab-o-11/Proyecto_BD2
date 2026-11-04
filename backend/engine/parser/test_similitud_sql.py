@@ -1,6 +1,6 @@
 from .scanner import Scanner
 from .sql_parser import ParseError, Parser
-from .nodes import DEFAULT_SCORE_COLUMN, And, SimilarTo
+from .nodes import DEFAULT_SCORE_COLUMN, And, SimilarTo, VectorLiteral
 from .visitor import PrintVisitor
 
 
@@ -92,10 +92,46 @@ def _score():
         _rechaza(sql)
 
 
+def _vector():
+    nodo = _ida_y_vuelta("CREATE TABLE imagenes (id INT PRIMARY KEY, nombre VARCHAR(50), embedding VECTOR(512) NOT NULL);")
+    columna = nodo.columns[2]
+    assert columna.type == "VECTOR" and columna.size == 512 and columna.not_null
+    nodo = _ida_y_vuelta("INSERT INTO imagenes VALUES (1, 'a', VECTOR(0.5, -1, 2e-3));")
+    assert nodo.values[2] == VectorLiteral((0.5, -1.0, 0.002))
+    nodo = _ida_y_vuelta("UPDATE imagenes SET embedding = VECTOR(1, 2, 3) WHERE id = 1;")
+    assert nodo.assignments[0][1] == VectorLiteral((1.0, 2.0, 3.0))
+    nodo = _ida_y_vuelta("SELECT * FROM imagenes WHERE SIMILAR_TO(VECTOR(1, 0, 0), k=3) USING HNSW;")
+    assert nodo.where == SimilarTo(VectorLiteral((1.0, 0.0, 0.0)), 3)
+    nodo = _ida_y_vuelta("CREATE INDEX idx ON imagenes (embedding) USING HNSW WITH (METRIC=cosine, M=16, EF_CONSTRUCTION=64);")
+    assert nodo.kind == "HNSW" and nodo.options == (("METRIC", "cosine"), ("M", 16), ("EF_CONSTRUCTION", 64))
+    nodo = _ida_y_vuelta("CREATE INDEX idx ON imagenes (embedding) USING IVF WITH (LISTS=100, METRIC=euclidean);")
+    assert nodo.kind == "IVF" and nodo.options == (("LISTS", 100), ("METRIC", "euclidean"))
+    assert _ida_y_vuelta("CREATE INDEX idx ON imagenes (embedding) USING HNSW;").options == ()
+    assert _ida_y_vuelta("CREATE INDEX idx ON clientes (nombre) USING BPLUS;").options == ()
+    for sql in [
+        "CREATE TABLE t (v VECTOR)",
+        "CREATE TABLE t (v VECTOR(0))",
+        "CREATE TABLE t (v VECTOR(1.5))",
+        "INSERT INTO t VALUES (VECTOR())",
+        "INSERT INTO t VALUES (VECTOR('a'))",
+        "INSERT INTO t VALUES (VECTOR(1, 1e999))",
+        "SELECT * FROM t WHERE id = VECTOR(1)",
+        "CREATE INDEX i ON t (v) USING GRAFO",
+        "CREATE INDEX i ON t (v) USING BPLUS WITH (METRIC=cosine)",
+        "CREATE INDEX i ON t (v) WITH (METRIC=cosine)",
+        "CREATE INDEX i ON t (v) USING HNSW WITH METRIC=cosine",
+        "CREATE INDEX i ON t (v) USING HNSW WITH (LISTS=3)",
+        "CREATE INDEX i ON t (v) USING IVF WITH (M=3)",
+        "CREATE INDEX i ON t (v) USING IVF WITH (METRIC=cosine, METRIC=dot)",
+    ]:
+        _rechaza(sql)
+
+
 def main():
     _similar_to()
     _using()
     _score()
+    _vector()
     print("OK: SQL de similitud")
 
 

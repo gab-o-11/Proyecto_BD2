@@ -33,6 +33,7 @@ class TokenType(Enum):
     DESC = auto()
     LIMIT = auto()
     POINT = auto()
+    VECTOR = auto()
     INDEX = auto()
     DROP = auto()
     IF = auto()
@@ -87,6 +88,7 @@ class TokenType(Enum):
 KEYWORDS = {
     "LIMIT": TokenType.LIMIT,
     "POINT": TokenType.POINT,
+    "VECTOR": TokenType.VECTOR,
     "JOIN": TokenType.JOIN,
     "INNER": TokenType.INNER,
     "ON": TokenType.ON,

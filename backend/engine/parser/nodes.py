@@ -34,8 +34,13 @@ DEFAULT_SCORE_COLUMN = "similarity_score"
 
 
 @dataclass(frozen=True)
+class VectorLiteral(Node):
+    values: tuple[float, ...]
+
+
+@dataclass(frozen=True)
 class SimilarTo(Node):
-    query: str
+    query: str | VectorLiteral
     k: int
 
 
@@ -201,6 +206,7 @@ class CreateIndex(Node):
     table: str
     column: str
     kind: Optional[str] = None
+    options: tuple = ()
 
 
 @dataclass

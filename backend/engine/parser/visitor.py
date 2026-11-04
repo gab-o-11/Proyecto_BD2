@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from .nodes import DEFAULT_SCORE_COLUMN, And, ColumnRef, Distance, Or, Point, aggregate_name
+from .nodes import DEFAULT_SCORE_COLUMN, And, ColumnRef, Distance, Or, Point, VectorLiteral, aggregate_name
 
 
 class Visitor(ABC):
@@ -145,6 +145,12 @@ class PrintVisitor(Visitor):
     def visit_Intersection(self, node):
         return f"intersecta({node.column}, {self.visit_Polygon(node.polygon)})"
 
+    def visit_VectorLiteral(self, node):
+        partes = []
+        for valor in node.values:
+            partes.append(str(valor))
+        return "VECTOR(" + ", ".join(partes) + ")"
+
     def visit_SimilarTo(self, node):
         return f"SIMILAR_TO({self._literal(node.query)}, k={node.k})"
 
@@ -161,6 +167,8 @@ class PrintVisitor(Visitor):
             return valor.name
         if isinstance(valor, Point):
             return PrintVisitor().visit_Point(valor)
+        if isinstance(valor, VectorLiteral):
+            return PrintVisitor().visit_VectorLiteral(valor)
         return "'" + valor.replace("'", "''") + "'" if isinstance(valor, str) else str(valor)
 
     def visit_BeginTransaction(self, node):
@@ -203,6 +211,11 @@ class PrintVisitor(Visitor):
         sql = f"CREATE INDEX {node.name} ON {node.table} ({node.column})"
         if node.kind is not None:
             sql += f" USING {node.kind}"
+        if node.options:
+            partes = []
+            for nombre, valor in node.options:
+                partes.append(f"{nombre}={valor}")
+            sql += " WITH (" + ", ".join(partes) + ")"
         return sql
 
     def visit_DropTable(self, node):
