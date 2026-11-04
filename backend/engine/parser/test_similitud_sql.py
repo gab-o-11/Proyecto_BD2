@@ -1,6 +1,6 @@
 from .scanner import Scanner
 from .sql_parser import ParseError, Parser
-from .nodes import And, SimilarTo
+from .nodes import DEFAULT_SCORE_COLUMN, And, SimilarTo
 from .visitor import PrintVisitor
 
 
@@ -67,9 +67,35 @@ def _using():
         _rechaza(sql)
 
 
+def _score():
+    nodo = _ida_y_vuelta("SELECT nombre, artista, SIMILARITY_SCORE() AS score FROM canciones WHERE SIMILAR_TO('audio_query.mp3', k=5) USING IVF WITH METRIC=euclidean ORDER BY score DESC;")
+    assert nodo.columns == ["nombre", "artista"] and nodo.projection == ["nombre", "artista", "score"]
+    assert nodo.score_column == "score" and nodo.order_by == "score" and nodo.order_desc
+    nodo = _ida_y_vuelta("SELECT similarity_score() FROM t WHERE SIMILAR_TO('q', k=1);")
+    assert nodo.score_column == DEFAULT_SCORE_COLUMN and nodo.columns == []
+    nodo = _ida_y_vuelta("SELECT *, SIMILARITY_SCORE() AS s FROM t WHERE SIMILAR_TO('q', k=1) USING SEQ;")
+    assert nodo.columns is None and nodo.score_column == "s" and nodo.projection is None
+    nodo = _ida_y_vuelta("SELECT SIMILARITY_SCORE() AS s, id FROM t WHERE SIMILAR_TO('q', k=1);")
+    assert nodo.projection == ["s", "id"]
+    assert _parse("SELECT * FROM t WHERE SIMILAR_TO('q', k=1);")[0].score_column is None
+    for sql in [
+        "SELECT SIMILARITY_SCORE() FROM t",
+        "SELECT SIMILARITY_SCORE() FROM t WHERE id = 1",
+        "SELECT SIMILARITY_SCORE(x) FROM t WHERE SIMILAR_TO('q', k=1)",
+        "SELECT SIMILARITY_SCORE() AS FROM t WHERE SIMILAR_TO('q', k=1)",
+        "SELECT SIMILARITY_SCORE(), SIMILARITY_SCORE() AS b FROM t WHERE SIMILAR_TO('q', k=1)",
+        "SELECT COUNT(*), SIMILARITY_SCORE() FROM t WHERE SIMILAR_TO('q', k=1)",
+        "SELECT *, id FROM t WHERE SIMILAR_TO('q', k=1)",
+        "SELECT *, COUNT(*) FROM t WHERE SIMILAR_TO('q', k=1)",
+        "SELECT id AS x FROM t WHERE SIMILAR_TO('q', k=1)",
+    ]:
+        _rechaza(sql)
+
+
 def main():
     _similar_to()
     _using()
+    _score()
     print("OK: SQL de similitud")
 
 

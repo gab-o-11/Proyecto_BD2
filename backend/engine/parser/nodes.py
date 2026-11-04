@@ -30,6 +30,9 @@ class Intersection(Node):
     polygon: Polygon
 
 
+DEFAULT_SCORE_COLUMN = "similarity_score"
+
+
 @dataclass(frozen=True)
 class SimilarTo(Node):
     query: str
@@ -139,6 +142,7 @@ class Select(Node):
     limit: Optional[int] = None
     index_method: Optional[str] = None
     search_options: tuple = ()
+    score_column: Optional[str] = None
 
 
 def aggregate_name(function, column):

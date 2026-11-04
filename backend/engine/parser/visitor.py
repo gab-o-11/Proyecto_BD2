@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from .nodes import And, ColumnRef, Distance, Or, Point, aggregate_name
+from .nodes import DEFAULT_SCORE_COLUMN, And, ColumnRef, Distance, Or, Point, aggregate_name
 
 
 class Visitor(ABC):
@@ -39,10 +39,19 @@ class PrintVisitor(Visitor):
 
     def visit_Select(self, node):
 
+        puntaje = None
+        if node.score_column is not None:
+            puntaje = "SIMILARITY_SCORE()"
+            if node.score_column != DEFAULT_SCORE_COLUMN:
+                puntaje += f" AS {node.score_column}"
         if node.columns is None:
             items = ["*"]
+            if puntaje is not None:
+                items.append(puntaje)
         else:
             expresiones = {columna: columna for columna in node.columns}
+            if puntaje is not None:
+                expresiones[node.score_column] = puntaje
             for func, arg in node.aggregates or []:
                 argumento = "*" if arg is None else arg
                 expresiones[aggregate_name(func, arg)] = f"{func.upper()}({argumento})"
