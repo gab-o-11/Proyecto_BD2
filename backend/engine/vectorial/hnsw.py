@@ -74,8 +74,24 @@ class IndiceHNSW:
         return ordenados
 
     def _seleccionar(self, candidatos, m):
+        if len(candidatos) <= m:
+            elegidos = []
+            for _, identificador in candidatos:
+                elegidos.append(identificador)
+            return elegidos
+        matriz = self.almacen.matriz()
         elegidos = []
-        for _, identificador in candidatos[:m]:
+        descartados = []
+        for valor, identificador in candidatos:
+            if len(elegidos) == m:
+                break
+            if not elegidos or (distancias(matriz[identificador], matriz[elegidos], self.metrica) > valor).all():
+                elegidos.append(identificador)
+            else:
+                descartados.append(identificador)
+        for identificador in descartados:
+            if len(elegidos) == m:
+                break
             elegidos.append(identificador)
         return elegidos
 

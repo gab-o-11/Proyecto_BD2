@@ -205,7 +205,7 @@ def _hnsw():
     datos = _vectores(1500, 16)
     consultas = _vectores(30, 16, semilla=9)
     with tempfile.TemporaryDirectory(prefix="test_vectorial_") as carpeta:
-        for metrica, minimo in ((EUCLIDEAN, 0.75), (COSINE, 0.95), (DOT, 0.95)):
+        for metrica, minimo in ((EUCLIDEAN, 0.95), (COSINE, 0.95), (DOT, 0.95)):
             almacen = _cargar_almacen(carpeta, datos, "hnsw_" + metrica)
             indice = IndiceHNSW(almacen, metrica)
             indice.construir()
