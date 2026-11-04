@@ -1,8 +1,11 @@
 import math
+import os
+import tempfile
 
 import numpy as np
 
 from .exacta import knn_exacto, recall_at_k
+from .almacen import AlmacenVectores
 from .metricas import COSINE, DOT, EUCLIDEAN, distancia, distancias, score, validar_metrica
 
 
@@ -62,10 +65,39 @@ def _exacta():
     _cerca(recall_at_k([], []), 1.0)
 
 
+def _almacen():
+    with tempfile.TemporaryDirectory(prefix="test_vectorial_") as carpeta:
+        ruta = os.path.join(carpeta, "t_embedding")
+        almacen = AlmacenVectores(ruta, 4)
+        datos = _vectores(300, 4)
+        ids = [almacen.agregar(vector, (1, i)) for i, vector in enumerate(datos)]
+        assert ids == list(range(300)) and len(almacen) == 300
+        assert np.array_equal(almacen.vector(120), datos[120])
+        assert almacen.rid(120) == (1, 120) and almacen.id_de((1, 120)) == 120
+        assert almacen.borrar((1, 120)) == 120 and almacen.borrar((1, 120)) is None
+        assert not almacen.vivo(120) and almacen.id_de((1, 120)) is None and len(almacen) == 299
+        assert almacen.agregar(datos[0], (1, 120)) == 300
+        assert almacen.rid(300) == (1, 120) and 120 not in almacen.ids_vivos().tolist()
+        _falla(lambda: almacen.agregar(datos[0], (1, 120)), "RID repetido")
+        _falla(lambda: almacen.agregar([1, 2], (2, 0)), "dimensión incorrecta")
+        _falla(lambda: almacen.agregar([1, 2, 3, float("nan")], (2, 0)), "valor no finito")
+        assert almacen.agregar_lote(datos[:2], [(3, 0), (3, 1)]) == [301, 302]
+        almacen.cerrar()
+        reabierto = AlmacenVectores(ruta, 4)
+        assert reabierto.total == 303 and len(reabierto) == 302
+        assert np.array_equal(reabierto.vector(5), datos[5]) and reabierto.id_de((3, 1)) == 302
+        assert not reabierto.vivo(120) and reabierto.id_de((1, 120)) == 300
+        _falla(lambda: AlmacenVectores(ruta, 8), "dimensión distinta al reabrir")
+        reabierto.destruir()
+        assert os.listdir(carpeta) == []
+        _falla(lambda: AlmacenVectores(ruta, 0), "dimensión no positiva")
+
+
 def main():
     _metricas()
     _exacta()
-    print("OK: métricas, búsqueda exacta")
+    _almacen()
+    print("OK: métricas, búsqueda exacta, almacén de vectores")
 
 
 if __name__ == "__main__":
