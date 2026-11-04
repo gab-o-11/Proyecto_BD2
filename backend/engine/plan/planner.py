@@ -1,6 +1,6 @@
 from . import costos
 from .costos import Perfil, ajustar_filas
-from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Rango, Resultado, SeqScan, Sort, SpatialIndexScan
+from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Rango, Resultado, SeqScan, Sort, SpatialIndexScan, VectorIndexScan, VectorSeqScan
 
 DESIGUALDADES = (">", ">=", "<", "<=")
 
@@ -127,3 +127,15 @@ def indice_espacial(tabla, columna, operacion, consulta, detalle, filas, extra_c
     filas = ajustar_filas(min(filas, max(perfil.filas, 1)))
     inicio, total = costos.costo_spatial_scan(perfil, arbol.height, arbol.max_entries, filas, extra_cpu)
     return SpatialIndexScan(tabla, columna, operacion, consulta, detalle).estimar(inicio, total, filas, perfil.ancho)
+
+
+def indice_vectorial(tabla, indice, consulta, k, parametros, puntaje):
+    perfil = Perfil(tabla)
+    filas = ajustar_filas(min(k, max(perfil.filas, 1)))
+    return VectorIndexScan(tabla, indice, consulta, k, parametros, puntaje).estimar(0.0, 0.0, filas, perfil.ancho)
+
+
+def escaneo_vectorial(tabla, almacen, consulta, k, metrica, puntaje):
+    perfil = Perfil(tabla)
+    filas = ajustar_filas(min(k, max(perfil.filas, 1)))
+    return VectorSeqScan(tabla, almacen, consulta, k, metrica, puntaje).estimar(0.0, 0.0, filas, perfil.ancho)

@@ -8,6 +8,8 @@ from itertools import islice
 from ..common import io_stats
 from ..external import external_sort
 from ..hashing import external_group_by, grace_hash_join
+from ..vectorial.exacta import knn_exacto
+from ..vectorial.metricas import score
 
 COMPARADORES = {
     "=": operator.eq, "!=": operator.ne,
@@ -350,6 +352,70 @@ class Sort(Nodo):
     def paso(self):
         metodo = "top-n-heapsort" if self.limite is not None else "external-merge"
         return {"op": "Order By", "method": metodo, "detail": self.clave + (" DESC" if self.reverse else "")}
+
+
+def _filas_vectoriales(tabla, almacen, pares, metrica, puntaje):
+    for valor, identificador in pares:
+        fila = tabla.fila_de_rid(almacen.rid(identificador))
+        if fila is not None:
+            fila[puntaje] = float(score(valor, metrica))
+            yield fila
+
+
+class VectorIndexScan(Nodo):
+    tipo = "Vector Index Scan"
+
+    def __init__(self, tabla, indice, consulta, k, parametros, puntaje):
+        super().__init__()
+        self.tabla = tabla
+        self.vectorial = indice
+        self.consulta = consulta
+        self.k = k
+        self.parametros = parametros
+        self.puntaje = puntaje
+
+    def titulo(self):
+        return "Vector Index Scan using " + self.vectorial.nombre + " on " + self.tabla.name
+
+    def relacion(self):
+        return self.tabla.name
+
+    def indice(self):
+        return self.vectorial.nombre
+
+    def producir(self):
+        pares = self.vectorial.estructura.buscar(self.consulta, self.k, **self.parametros)
+        yield from _filas_vectoriales(self.tabla, self.vectorial.almacen, pares, self.vectorial.metrica, self.puntaje)
+
+    def paso(self):
+        return {"op": self.tipo, "method": self.vectorial.tipo + "-" + self.vectorial.metrica,
+                "detail": self.vectorial.nombre + " k=" + str(self.k)}
+
+
+class VectorSeqScan(Nodo):
+    tipo = "Seq Scan"
+
+    def __init__(self, tabla, almacen, consulta, k, metrica, puntaje):
+        super().__init__()
+        self.tabla = tabla
+        self.almacen = almacen
+        self.consulta = consulta
+        self.k = k
+        self.metrica = metrica
+        self.puntaje = puntaje
+
+    def titulo(self):
+        return "Seq Scan on " + self.tabla.name
+
+    def relacion(self):
+        return self.tabla.name
+
+    def producir(self):
+        pares = knn_exacto(self.consulta, self.almacen.matriz(), self.k, self.metrica, self.almacen.ids_vivos())
+        yield from _filas_vectoriales(self.tabla, self.almacen, pares, self.metrica, self.puntaje)
+
+    def paso(self):
+        return {"op": self.tipo, "method": "exact-" + self.metrica, "detail": self.tabla.name + " k=" + str(self.k)}
 
 
 class Calificar(Nodo):

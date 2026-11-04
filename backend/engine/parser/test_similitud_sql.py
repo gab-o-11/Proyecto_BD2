@@ -9,6 +9,8 @@ from .sql_parser import ParseError, Parser
 from .nodes import DEFAULT_SCORE_COLUMN, And, SimilarTo, VectorLiteral
 from .visitor import PrintVisitor
 from ..catalog import _load_tables, table_info
+from ..vectorial.exacta import knn_exacto
+from ..vectorial.metricas import COSINE, DOT, EUCLIDEAN, distancias, score
 
 
 def _parse(sql):
@@ -258,9 +260,104 @@ def _crear_indices():
         assert not any(nombre.startswith("img") for nombre in os.listdir(carpeta))
 
 
+def _ids(resultado):
+    salida = []
+    for fila in resultado["rows"]:
+        salida.append(fila["id"])
+    return salida
+
+
+def _plan(resultado):
+    salida = []
+    for paso in resultado["plan"]:
+        salida.append(paso["op"])
+    return salida
+
+
+def _busquedas():
+    datos = _datos(200, 6).astype(np.float32)
+    with tempfile.TemporaryDirectory(prefix="test_similitud_") as carpeta:
+        catalogo = {}
+        executor = Executor(catalogo, data_dir=carpeta)
+        _tabla_con_datos(executor, datos)
+        consulta = datos[7]
+        q = _literal(consulta)
+        for metrica in (EUCLIDEAN, COSINE, DOT):
+            exacto = knn_exacto(consulta, datos, 10, metrica)
+            esperados = []
+            for _, identificador in exacto:
+                esperados.append(identificador)
+            resultado = _ejecutar(executor, f"SELECT id, SIMILARITY_SCORE() AS score FROM img WHERE SIMILAR_TO({q}, k=10) USING SEQ WITH METRIC={metrica};")
+            assert _ids(resultado) == esperados, metrica
+            assert resultado["columns"] == ["id", "score"] and "Seq Scan" in _plan(resultado)
+            for fila, (valor, _) in zip(resultado["rows"], exacto):
+                assert abs(fila["score"] - score(valor, metrica)) < 1e-5
+            _ejecutar(executor, f"CREATE INDEX h_{metrica} ON img (v) USING HNSW WITH (METRIC={metrica});")
+            _ejecutar(executor, f"CREATE INDEX i_{metrica} ON img (v) USING IVF WITH (METRIC={metrica});")
+            resultado = _ejecutar(executor, f"SELECT id FROM img WHERE SIMILAR_TO({q}, k=10) USING HNSW WITH METRIC={metrica}, EF_SEARCH=200;")
+            assert "Vector Index Scan" in _plan(resultado) and len(set(_ids(resultado)) & set(esperados)) >= 9
+            lists = catalogo["img"].indices_vectoriales["i_" + metrica].estructura.lists
+            resultado = _ejecutar(executor, f"SELECT id FROM img WHERE SIMILAR_TO({q}, k=10) USING IVF WITH METRIC={metrica}, PROBES={lists};")
+            assert "Vector Index Scan" in _plan(resultado) and _ids(resultado) == esperados
+        resultado = _ejecutar(executor, f"SELECT id, SIMILARITY_SCORE() AS score FROM img WHERE SIMILAR_TO({q}, k=5) USING HNSW WITH METRIC=cosine ORDER BY score DESC;")
+        puntajes = []
+        for fila in resultado["rows"]:
+            puntajes.append(fila["score"])
+        assert puntajes == sorted(puntajes, reverse=True) and resultado["rows"][0]["id"] == 7
+        resultado = _ejecutar(executor, f"SELECT id, SIMILARITY_SCORE() AS score FROM img WHERE SIMILAR_TO({q}, k=5) USING SEQ WITH METRIC=euclidean ORDER BY score ASC;")
+        assert resultado["rows"][-1]["id"] == 7 and abs(resultado["rows"][-1]["score"] - 1.0) < 1e-6
+        resultado = _ejecutar(executor, f"SELECT *, SIMILARITY_SCORE() FROM img WHERE SIMILAR_TO({q}, k=3) USING SEQ;")
+        assert resultado["columns"] == ["id", "grupo", "similarity_score"] and len(resultado["rows"]) == 3
+        resultado = _ejecutar(executor, f"SELECT * FROM img WHERE SIMILAR_TO({q}, k=3) USING SEQ ORDER BY similarity_score DESC LIMIT 2;")
+        assert resultado["columns"] == ["id", "grupo"] and _ids(resultado)[0] == 7 and len(resultado["rows"]) == 2
+        resultado = _ejecutar(executor, f"SELECT id FROM img WHERE SIMILAR_TO({q}, k=500) USING SEQ;")
+        assert len(resultado["rows"]) == 200
+        resultado = _ejecutar(executor, f"SELECT id, grupo FROM img WHERE grupo = 1 AND SIMILAR_TO({q}, k=10) USING SEQ;")
+        todos = _ejecutar(executor, f"SELECT id, grupo FROM img WHERE SIMILAR_TO({q}, k=10) USING SEQ;")
+        cumplen = []
+        for fila in todos["rows"]:
+            if fila["grupo"] == 1:
+                cumplen.append(fila["id"])
+        assert _ids(resultado) == cumplen and len(cumplen) < 10 and "Filter" in _plan(resultado)
+        _ejecutar(executor, "DROP INDEX h_cosine;")
+        resultado = _ejecutar(executor, f"SELECT id FROM img WHERE SIMILAR_TO({q}, k=3) USING HNSW WITH METRIC=cosine;")
+        assert "Seq Scan" in _plan(resultado) and "Vector Index Scan" not in _plan(resultado)
+        _error(executor, f"SELECT id FROM img WHERE SIMILAR_TO({q}, k=3) USING SEQ WITH EF_SEARCH=5;", "EF_SEARCH")
+        _error(executor, f"SELECT id FROM img WHERE SIMILAR_TO({q}, k=3) USING HNSW WITH PROBES=5;", "PROBES")
+        _error(executor, "SELECT id FROM img WHERE SIMILAR_TO(VECTOR(1, 2), k=3);", "dimensión 6")
+        _error(executor, "SELECT id FROM img WHERE SIMILAR_TO('foto.jpg', k=3);", "extractor")
+        _error(executor, f"SELECT id FROM img WHERE grupo = 1 OR SIMILAR_TO({q}, k=3);", "AND")
+        _error(executor, f"SELECT id FROM img WHERE NOT SIMILAR_TO({q}, k=3);", "AND")
+        _error(executor, f"SELECT id FROM img WHERE SIMILAR_TO({q}, k=3) AND SIMILAR_TO({q}, k=4);", "un solo")
+        _error(executor, f"SELECT a.id FROM img a JOIN img b ON a.id = b.id WHERE SIMILAR_TO({q}, k=3);", "JOIN")
+        _error(executor, f"SELECT id, SIMILARITY_SCORE() AS grupo FROM img WHERE SIMILAR_TO({q}, k=3);", "coincide")
+        _error(executor, f"DELETE FROM img WHERE SIMILAR_TO({q}, k=3);", "solo se admite en SELECT")
+        _error(executor, f"UPDATE img SET grupo = 1 WHERE SIMILAR_TO({q}, k=3);", "solo se admite en SELECT")
+        _ejecutar(executor, "CREATE TABLE plana (id INT);")
+        _error(executor, f"SELECT id FROM plana WHERE SIMILAR_TO({q}, k=3);", "columna VECTOR")
+        _ejecutar(executor, "CREATE TABLE doble (id INT, a VECTOR(2), b VECTOR(2));")
+        _error(executor, "SELECT id FROM doble WHERE SIMILAR_TO(VECTOR(1, 2), k=3);", "exactamente una")
+        _ejecutar(executor, "CREATE TABLE vacia (id INT, v VECTOR(2));")
+        assert _ejecutar(executor, "SELECT id FROM vacia WHERE SIMILAR_TO(VECTOR(1, 2), k=3);")["rows"] == []
+        _ejecutar(executor, "CREATE INDEX vacio ON vacia (v) USING HNSW;")
+        assert _ejecutar(executor, "SELECT id FROM vacia WHERE SIMILAR_TO(VECTOR(1, 2), k=3) USING HNSW;")["rows"] == []
+        rutas = []
+
+        def vectorizador(ruta):
+            rutas.append(ruta)
+            return consulta
+
+        con_archivo = Executor(catalogo, data_dir=carpeta, vectorizador=vectorizador)
+        resultado = _ejecutar(con_archivo, "SELECT id FROM img WHERE SIMILAR_TO('foto.jpg', k=1) USING SEQ;")
+        assert rutas == ["foto.jpg"] and _ids(resultado) == [7]
+        malo = Executor(catalogo, data_dir=carpeta, vectorizador=lambda ruta: [1.0, 2.0])
+        _error(malo, "SELECT id FROM img WHERE SIMILAR_TO('foto.jpg', k=1) USING SEQ;", "dimensión 6")
+
+
 def main():
     _columna_vector()
     _crear_indices()
+    _busquedas()
     _similar_to()
     _using()
     _score()

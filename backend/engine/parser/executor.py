@@ -4,7 +4,7 @@ import re
 import struct
 import time
 from .visitor import PrintVisitor, Visitor
-from .nodes import And, Between, ColumnRef, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, VectorLiteral, aggregate_name, condition_columns, expression_columns
+from .nodes import DEFAULT_SCORE_COLUMN, And, Between, ColumnRef, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, SimilarTo, VectorLiteral, aggregate_name, condition_columns, contains_similar, expression_columns
 from ..catalog import StorageTable, nombres_de_indices
 from ..transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from ..plan import Predicado, Rango, base_de, planner, reporte
@@ -112,13 +112,14 @@ class Table(SpatialTable):
 
 
 class Executor(Visitor):
-    def __init__(self, catalog=None, transaction_manager=None, data_dir=None, parameters=None):
+    def __init__(self, catalog=None, transaction_manager=None, data_dir=None, parameters=None, vectorizador=None):
         self.catalog = catalog if catalog is not None else {}
         self.plan = []
         self.paginas_tocadas = set()
         self.transaction_manager = transaction_manager or TransactionManager()
         self.data_dir = data_dir
         self.parameters = parameters or {}
+        self.vectorizador = vectorizador
 
     def execute(self, sentencias):
         for resultado in self.run(sentencias):
@@ -249,8 +250,16 @@ class Executor(Visitor):
         return {"message": f"{raiz.afectadas} fila(s) eliminada(s) de '{raiz.tabla.name}'"}
 
     def _plan_select(self, node):
-        raiz, tabla = self._fuente_select(node)
+        similar = self._similar_de(node.where)
+        puntaje = None
+        if similar is None:
+            raiz, tabla = self._fuente_select(node)
+        else:
+            puntaje = node.score_column or DEFAULT_SCORE_COLUMN
+            raiz, tabla = self._fuente_similitud(node, similar, puntaje)
         columnas = list(tabla.columns) if node.columns is None else [self._columna(tabla, c) for c in node.columns]
+        if node.columns is None and node.score_column is not None:
+            columnas.append(puntaje)
         grupo = None if node.group_by is None else self._columna(tabla, node.group_by)
 
         if node.group_by is not None:
@@ -270,13 +279,15 @@ class Executor(Visitor):
 
         if node.projection is not None:
             agregaciones = {aggregate_name(func, arg) for func, arg in node.aggregates or []}
-            columnas = [c if c in agregaciones else self._columna(tabla, c) for c in node.projection]
+            columnas = [c if c in agregaciones or c == node.score_column else self._columna(tabla, c) for c in node.projection]
             if len(columnas) != len(set(columnas)):
                 raise SemanticError("hay columnas repetidas en el resultado")
 
         if node.order_by is not None:
             orden = node.order_by
             disponibles = columnas if node.group_by is not None or node.aggregates is not None else tabla.columns
+            if puntaje is not None and node.group_by is None and node.aggregates is None:
+                disponibles = list(tabla.columns) + [puntaje]
             if isinstance(orden, Distance):
                 key_fn = self._distancia(tabla, orden, disponibles)
                 indice = None
@@ -294,7 +305,7 @@ class Executor(Visitor):
                         indice = self._knn_filtrado(actual, target, texto, node.where, node.limit, raiz, key_fn)
                 raiz = indice if indice is not None else planner.ordenar(raiz, texto, MEM_BUDGET, node.order_desc, key_fn)
             else:
-                if orden not in columnas:
+                if orden not in columnas and orden != puntaje:
                     orden = self._columna(tabla, orden)
                 if orden not in disponibles:
                     raise SemanticError(f"la columna '{node.order_by}' no está disponible para ORDER BY")
@@ -304,6 +315,90 @@ class Executor(Visitor):
             raiz = planner.limitar(raiz, node.limit)
 
         return raiz, columnas, tabla
+
+    @staticmethod
+    def _similar_de(where):
+        if not contains_similar(where):
+            return None
+        if isinstance(where, SimilarTo):
+            return where
+        if not isinstance(where, And):
+            raise SemanticError("SIMILAR_TO solo se combina con otras condiciones mediante AND")
+        encontrados = []
+        for parte in where.conditions:
+            if isinstance(parte, SimilarTo):
+                encontrados.append(parte)
+            elif contains_similar(parte):
+                raise SemanticError("SIMILAR_TO solo se combina con otras condiciones mediante AND")
+        if len(encontrados) > 1:
+            raise SemanticError("una consulta admite un solo SIMILAR_TO")
+        return encontrados[0]
+
+    def _fuente_similitud(self, node, similar, puntaje):
+        tabla = self._tabla(node.table)
+        self._bloquear_tabla(tabla, LockMode.PS)
+        if node.joins or node.table_alias is not None:
+            raise SemanticError("SIMILAR_TO no admite JOIN ni alias de tabla")
+        almacenes = getattr(tabla, "almacenes", {})
+        if len(almacenes) != 1:
+            raise SemanticError(f"SIMILAR_TO requiere que '{tabla.name}' tenga exactamente una columna VECTOR")
+        if puntaje in tabla.columns:
+            raise SemanticError(f"el alias '{puntaje}' coincide con una columna de '{tabla.name}'")
+        columna = next(iter(almacenes))
+        almacen = almacenes[columna]
+        consulta = self._vector_consulta(similar.query, almacen.dimension)
+        opciones = dict(node.search_options)
+        if "PROBES" in opciones and node.index_method != "IVF":
+            raise SemanticError("PROBES solo se admite con USING IVF")
+        if "EF_SEARCH" in opciones and node.index_method != "HNSW":
+            raise SemanticError("EF_SEARCH solo se admite con USING HNSW")
+        indice = self._elegir_indice(tabla, columna, node.index_method, opciones.get("METRIC"))
+        if indice is None:
+            raiz = planner.escaneo_vectorial(tabla, almacen, consulta, similar.k, opciones.get("METRIC", COSINE), puntaje)
+        else:
+            parametros = {}
+            if "PROBES" in opciones and indice.tipo == "IVF":
+                parametros["probes"] = opciones["PROBES"]
+            if "EF_SEARCH" in opciones and indice.tipo == "HNSW":
+                parametros["ef_search"] = opciones["EF_SEARCH"]
+            raiz = planner.indice_vectorial(tabla, indice, consulta, similar.k, parametros, puntaje)
+        if isinstance(node.where, And):
+            resto = []
+            for parte in node.where.conditions:
+                if parte is not similar:
+                    resto.append(parte)
+            predicado, seleccion = self._predicado(tabla, resto[0] if len(resto) == 1 else And(tuple(resto)))
+            raiz = planner.filtrar(raiz, predicado, selectividad=seleccion)
+        return raiz, tabla
+
+    def _vector_consulta(self, consulta, dimension):
+        if isinstance(consulta, VectorLiteral):
+            with np.errstate(over="ignore"):
+                vector = np.array(consulta.values, dtype=np.float32)
+        elif self.vectorizador is None:
+            raise SemanticError("no hay un extractor configurado para consultar por archivo; usa SIMILAR_TO(VECTOR(...), k=...)")
+        else:
+            vector = np.asarray(self.vectorizador(consulta), dtype=np.float32)
+        if vector.shape != (dimension,):
+            raise SemanticError(f"la consulta debe ser un vector de dimensión {dimension} y llegó {vector.shape}")
+        if not np.isfinite(vector).all():
+            raise SemanticError("el vector de consulta excede el rango de FLOAT")
+        return vector
+
+    @staticmethod
+    def _elegir_indice(tabla, columna, metodo, metrica):
+        if metodo == "SEQ":
+            return None
+        for nombre in sorted(tabla.indices_vectoriales):
+            indice = tabla.indices_vectoriales[nombre]
+            if indice.columna != columna:
+                continue
+            if metodo is not None and indice.tipo != metodo:
+                continue
+            if metrica is not None and indice.metrica != metrica:
+                continue
+            return indice
+        return None
 
     def _fuente_select(self, node):
         izquierda = self._tabla(node.table)
@@ -503,6 +598,8 @@ class Executor(Visitor):
     def _acceso(self, tabla, where):
         if where is None:
             return planner.acceso(tabla, None)
+        if contains_similar(where):
+            raise SemanticError("SIMILAR_TO solo se admite en SELECT")
         if self._es_espacial(where):
             return self._acceso_espacial(tabla, where)
         if self._es_simple(where):
