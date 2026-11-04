@@ -354,10 +354,59 @@ def _busquedas():
         _error(malo, "SELECT id FROM img WHERE SIMILAR_TO('foto.jpg', k=1) USING SEQ;", "dimensión 6")
 
 
+def _texto_plan(resultado):
+    return "\n".join(resultado["explain"]["text"])
+
+
+def _explain():
+    datos = _datos(300, 8).astype(np.float32)
+    with tempfile.TemporaryDirectory(prefix="test_similitud_") as carpeta:
+        catalogo = {}
+        executor = Executor(catalogo, data_dir=carpeta)
+        _tabla_con_datos(executor, datos)
+        q = _literal(datos[1])
+        _ejecutar(executor, "CREATE INDEX ih ON img (v) USING HNSW WITH (METRIC=cosine, M=8);")
+        _ejecutar(executor, "CREATE INDEX iv ON img (v) USING IVF WITH (METRIC=euclidean, LISTS=16);")
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM img WHERE SIMILAR_TO({q}, k=5) USING HNSW WITH METRIC=cosine, EF_SEARCH=50;"))
+        assert "Vector Index Scan using ih on img" in texto and "Metric: cosine" in texto
+        assert "m=8, ef_search=50" in texto and "cost=" in texto and "Seq Scan" not in texto
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM img WHERE SIMILAR_TO({q}, k=20) USING HNSW WITH METRIC=cosine, EF_SEARCH=5;"))
+        assert "ef_search=20" in texto
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM img WHERE SIMILAR_TO({q}, k=5) USING IVF WITH METRIC=euclidean;"))
+        assert "Vector Index Scan using iv" in texto and "lists=16, probes=4" in texto
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM img WHERE SIMILAR_TO({q}, k=5) USING IVF WITH METRIC=euclidean, PROBES=8;"))
+        assert "probes=8" in texto
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM img WHERE SIMILAR_TO({q}, k=5) USING SEQ WITH METRIC=dot;"))
+        assert "Seq Scan on img" in texto and "Similarity: exact k=5" in texto and "Metric: dot" in texto and "Note" not in texto
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM img WHERE SIMILAR_TO({q}, k=5) USING HNSW WITH METRIC=dot;"))
+        assert "Seq Scan on img" in texto and "no existe un índice HNSW con métrica dot" in texto
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN ANALYZE SELECT id, SIMILARITY_SCORE() AS score FROM img WHERE grupo = 1 AND SIMILAR_TO({q}, k=5) USING HNSW WITH METRIC=cosine ORDER BY score DESC LIMIT 2;"))
+        assert "Vector Index Scan using ih" in texto and "actual time=" in texto
+        assert "Filter" in texto and "Sort" in texto and "Limit" in texto and "Execution Time" in texto
+        resultado = _ejecutar(executor, f"EXPLAIN SELECT id FROM img WHERE SIMILAR_TO({q}, k=5) USING HNSW WITH METRIC=cosine;")
+        assert resultado["explain"]["tree"]["index"] == "ih" and resultado["explain"]["tree"]["node"] == "Vector Index Scan"
+        pocos = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM img WHERE SIMILAR_TO({q}, k=5);"))
+        assert "Seq Scan on img" in pocos and "Note" not in pocos
+        _ejecutar(executor, "CREATE TABLE grande (id INT PRIMARY KEY, v VECTOR(8));")
+        almacen = catalogo["grande"].almacenes["v"]
+        azar = np.random.default_rng(0)
+        muchos = azar.random((40000, 8)).astype(np.float32)
+        rids = []
+        for i in range(40000):
+            rids.append((1, i))
+        almacen.agregar_lote(muchos, rids)
+        _ejecutar(executor, "CREATE INDEX g_iv ON grande (v) USING IVF WITH (METRIC=cosine, LISTS=200);")
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM grande WHERE SIMILAR_TO({q}, k=5);"))
+        assert "Vector Index Scan using g_iv" in texto, texto
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM grande WHERE SIMILAR_TO({q}, k=5) USING SEQ;"))
+        assert "Seq Scan on grande" in texto
+
+
 def main():
     _columna_vector()
     _crear_indices()
     _busquedas()
+    _explain()
     _similar_to()
     _using()
     _score()

@@ -238,3 +238,30 @@ def costo_sort_topn(total_hijo, filas, limite):
     n = max(filas, 2)
     inicio = total_hijo + 2 * CPU_OPERATOR_COST * n * math.log2(max(2 * limite, 2))
     return inicio, inicio + CPU_OPERATOR_COST * min(limite, filas)
+
+
+def _costo_filas_vectoriales(perfil, k):
+    filas = min(k, max(perfil.filas, 1))
+    return min(filas, perfil.paginas) * RANDOM_PAGE_COST + filas * CPU_TUPLE_COST
+
+
+def costo_vector_exacto(perfil, vectores, dimension, k):
+    comparaciones = vectores * dimension * CPU_OPERATOR_COST
+    inicio = comparaciones + vectores * math.log2(max(k, 2)) * CPU_OPERATOR_COST
+    return inicio, inicio + _costo_filas_vectoriales(perfil, k)
+
+
+def costo_vector_ivf(perfil, vectores, dimension, lists, probes, k):
+    candidatos = min(vectores, vectores * min(probes, lists) / max(lists, 1))
+    inicio = (lists + candidatos) * dimension * CPU_OPERATOR_COST
+    inicio += candidatos * math.log2(max(k, 2)) * CPU_OPERATOR_COST
+    return inicio, inicio + _costo_filas_vectoriales(perfil, k)
+
+
+def costo_vector_hnsw(perfil, vectores, dimension, m, ef_search, k):
+    saltos = ef_search + math.log2(max(vectores, 2))
+    candidatos = min(vectores, saltos * 2 * m)
+    inicio = candidatos * dimension * CPU_OPERATOR_COST
+    inicio += candidatos * math.log2(max(ef_search, 2)) * CPU_OPERATOR_COST
+    return inicio, inicio + _costo_filas_vectoriales(perfil, k)
+

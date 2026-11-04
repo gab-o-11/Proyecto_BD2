@@ -352,16 +352,7 @@ class Executor(Visitor):
             raise SemanticError("PROBES solo se admite con USING IVF")
         if "EF_SEARCH" in opciones and node.index_method != "HNSW":
             raise SemanticError("EF_SEARCH solo se admite con USING HNSW")
-        indice = self._elegir_indice(tabla, columna, node.index_method, opciones.get("METRIC"))
-        if indice is None:
-            raiz = planner.escaneo_vectorial(tabla, almacen, consulta, similar.k, opciones.get("METRIC", COSINE), puntaje)
-        else:
-            parametros = {}
-            if "PROBES" in opciones and indice.tipo == "IVF":
-                parametros["probes"] = opciones["PROBES"]
-            if "EF_SEARCH" in opciones and indice.tipo == "HNSW":
-                parametros["ef_search"] = opciones["EF_SEARCH"]
-            raiz = planner.indice_vectorial(tabla, indice, consulta, similar.k, parametros, puntaje)
+        raiz = self._acceso_vectorial(tabla, columna, almacen, consulta, similar.k, node.index_method, opciones, puntaje)
         if isinstance(node.where, And):
             resto = []
             for parte in node.where.conditions:
@@ -385,20 +376,38 @@ class Executor(Visitor):
             raise SemanticError("el vector de consulta excede el rango de FLOAT")
         return vector
 
-    @staticmethod
-    def _elegir_indice(tabla, columna, metodo, metrica):
-        if metodo == "SEQ":
-            return None
-        for nombre in sorted(tabla.indices_vectoriales):
-            indice = tabla.indices_vectoriales[nombre]
-            if indice.columna != columna:
-                continue
-            if metodo is not None and indice.tipo != metodo:
-                continue
-            if metrica is not None and indice.metrica != metrica:
-                continue
-            return indice
-        return None
+    def _acceso_vectorial(self, tabla, columna, almacen, consulta, k, metodo, opciones, puntaje):
+        metrica = opciones.get("METRIC")
+        if metodo is None:
+            metrica = COSINE
+        parametros = {}
+        if "PROBES" in opciones:
+            parametros["probes"] = opciones["PROBES"]
+        if "EF_SEARCH" in opciones:
+            parametros["ef_search"] = opciones["EF_SEARCH"]
+        candidatos = []
+        if metodo != "SEQ":
+            for nombre in sorted(tabla.indices_vectoriales):
+                indice = tabla.indices_vectoriales[nombre]
+                if indice.columna != columna:
+                    continue
+                if metodo is not None and indice.tipo != metodo:
+                    continue
+                if metrica is not None and indice.metrica != metrica:
+                    continue
+                candidatos.append(planner.indice_vectorial(tabla, indice, consulta, k, parametros, puntaje))
+        if metodo in ("IVF", "HNSW"):
+            if candidatos:
+                return candidatos[0]
+            nota = f"no existe un índice {metodo}"
+            if metrica is not None:
+                nota += f" con métrica {metrica}"
+            return planner.escaneo_vectorial(tabla, almacen, consulta, k, metrica or COSINE, puntaje, nota + "; búsqueda lineal")
+        mejor = planner.escaneo_vectorial(tabla, almacen, consulta, k, metrica or COSINE, puntaje)
+        for candidato in candidatos:
+            if candidato.costo_total < mejor.costo_total:
+                mejor = candidato
+        return mejor
 
     def _fuente_select(self, node):
         izquierda = self._tabla(node.table)

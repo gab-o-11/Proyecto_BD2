@@ -365,8 +365,9 @@ def _filas_vectoriales(tabla, almacen, pares, metrica, puntaje):
 class VectorIndexScan(Nodo):
     tipo = "Vector Index Scan"
 
-    def __init__(self, tabla, indice, consulta, k, parametros, puntaje):
+    def __init__(self, tabla, indice, consulta, k, parametros, puntaje, ajustes):
         super().__init__()
+        self.ajustes = ajustes
         self.tabla = tabla
         self.vectorial = indice
         self.consulta = consulta
@@ -383,6 +384,11 @@ class VectorIndexScan(Nodo):
     def indice(self):
         return self.vectorial.nombre
 
+    def detalles(self):
+        return ["Similarity: " + self.vectorial.columna + " k=" + str(self.k),
+                "Metric: " + self.vectorial.metrica,
+                self.vectorial.tipo + ": " + self.ajustes]
+
     def producir(self):
         pares = self.vectorial.estructura.buscar(self.consulta, self.k, **self.parametros)
         yield from _filas_vectoriales(self.tabla, self.vectorial.almacen, pares, self.vectorial.metrica, self.puntaje)
@@ -395,8 +401,9 @@ class VectorIndexScan(Nodo):
 class VectorSeqScan(Nodo):
     tipo = "Seq Scan"
 
-    def __init__(self, tabla, almacen, consulta, k, metrica, puntaje):
+    def __init__(self, tabla, almacen, consulta, k, metrica, puntaje, nota=None):
         super().__init__()
+        self.nota = nota
         self.tabla = tabla
         self.almacen = almacen
         self.consulta = consulta
@@ -409,6 +416,12 @@ class VectorSeqScan(Nodo):
 
     def relacion(self):
         return self.tabla.name
+
+    def detalles(self):
+        salida = ["Similarity: exact k=" + str(self.k), "Metric: " + self.metrica]
+        if self.nota is not None:
+            salida.append("Note: " + self.nota)
+        return salida
 
     def producir(self):
         pares = knn_exacto(self.consulta, self.almacen.matriz(), self.k, self.metrica, self.almacen.ids_vivos())
