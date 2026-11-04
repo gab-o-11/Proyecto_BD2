@@ -1,7 +1,14 @@
+import os
+import tempfile
+
+import numpy as np
+
+from .executor import Executor
 from .scanner import Scanner
 from .sql_parser import ParseError, Parser
 from .nodes import DEFAULT_SCORE_COLUMN, And, SimilarTo, VectorLiteral
 from .visitor import PrintVisitor
+from ..catalog import _load_tables, table_info
 
 
 def _parse(sql):
@@ -127,7 +134,71 @@ def _vector():
         _rechaza(sql)
 
 
+def _ejecutar(executor, sql):
+    resultados = executor.run(_parse(sql))
+    assert "error" not in resultados[-1], (sql, resultados[-1])
+    return resultados[-1]
+
+
+def _error(executor, sql, texto):
+    resultado = executor.run(_parse(sql))[-1]
+    assert "error" in resultado, (sql, resultado)
+    assert texto in resultado["error"], (sql, resultado["error"])
+
+
+def _columna_vector():
+    with tempfile.TemporaryDirectory(prefix="test_similitud_") as carpeta:
+        catalogo = {}
+        executor = Executor(catalogo, data_dir=carpeta)
+        _ejecutar(executor, "CREATE TABLE img (id INT PRIMARY KEY, nombre VARCHAR(20), v VECTOR(3));")
+        _ejecutar(executor, "INSERT INTO img VALUES (1, 'a', VECTOR(1, 0, 0)), (2, 'b', VECTOR(0, 1, 0));")
+        _ejecutar(executor, "INSERT INTO img (id, nombre) VALUES (3, 'c');")
+        _ejecutar(executor, "INSERT INTO img (id, v, nombre) VALUES (4, VECTOR(0, 0, 1), 'd');")
+        tabla = catalogo["img"]
+        almacen = tabla.almacenes["v"]
+        assert tabla.columns == ["id", "nombre"] and len(almacen) == 3
+        filas = _ejecutar(executor, "SELECT * FROM img ORDER BY id;")
+        assert filas["columns"] == ["id", "nombre"] and len(filas["rows"]) == 4
+        assert table_info(tabla)["columns"][-1] == {"name": "v", "type": "vector"}
+        _error(executor, "SELECT v FROM img;", "no existe")
+        _error(executor, "INSERT INTO img VALUES (5, 'e', VECTOR(1, 2));", "dimensión 3")
+        _error(executor, "INSERT INTO img VALUES (5, 'e', 7);", "requiere VECTOR")
+        _error(executor, "INSERT INTO img VALUES (VECTOR(1), 'e', VECTOR(1, 2, 3));", "no es de tipo VECTOR")
+        _error(executor, "INSERT INTO img VALUES (5, 'e', VECTOR(1, 2, 1e50));", "rango")
+        _error(executor, "INSERT INTO img VALUES (5, 'e');", "se esperaban 3 valores")
+        _ejecutar(executor, "UPDATE img SET v = VECTOR(5, 5, 5) WHERE id = 3;")
+        assert len(almacen) == 4
+        fila = tabla.search("id", 3)[0]
+        assert np.array_equal(almacen.vector(almacen.id_de(fila["__rid__"])), [5, 5, 5])
+        _ejecutar(executor, "UPDATE img SET v = NULL WHERE id = 3;")
+        assert len(almacen) == 3 and almacen.id_de(fila["__rid__"]) is None
+        _ejecutar(executor, "UPDATE img SET nombre = 'z', v = VECTOR(9, 9, 9) WHERE id = 1;")
+        fila = tabla.search("id", 1)[0]
+        assert fila["nombre"] == "z" and np.array_equal(almacen.vector(almacen.id_de(fila["__rid__"])), [9, 9, 9])
+        _ejecutar(executor, "DELETE FROM img WHERE id = 2;")
+        assert len(almacen) == 2
+        _ejecutar(executor, "INSERT INTO img VALUES (6, 'f', VECTOR(7, 7, 7));")
+        assert len(almacen) == 3
+        tabla.cerrar()
+        catalogo = _load_tables(carpeta)
+        reabierta = catalogo["img"]
+        assert len(reabierta.almacenes["v"]) == 3 and reabierta.columnas_declaradas() == ["id", "nombre", "v"]
+        fila = reabierta.search("id", 6)[0]
+        assert np.array_equal(reabierta.almacenes["v"].vector(reabierta.almacenes["v"].id_de(fila["__rid__"])), [7, 7, 7])
+        executor = Executor(catalogo, data_dir=carpeta)
+        _ejecutar(executor, "CREATE TABLE obligatoria (id INT, v VECTOR(2) NOT NULL);")
+        _error(executor, "INSERT INTO obligatoria (id) VALUES (1);", "no admite NULL")
+        _error(executor, "CREATE TABLE p (v VECTOR(2) PRIMARY KEY, id INT);", "PRIMARY KEY")
+        _error(executor, "CREATE TABLE c (id INT PRIMARY KEY, v VECTOR(2)) USING BPLUS_CLUSTERED;", "BPLUS_CLUSTERED")
+        _error(executor, "CREATE TABLE s (v VECTOR(2));", "columna escalar")
+        _error(Executor({}), "CREATE TABLE m (id INT, v VECTOR(2));", "en disco")
+        _ejecutar(executor, "DROP TABLE img;")
+        restantes = os.listdir(carpeta)
+        assert not any(nombre.startswith("img") for nombre in restantes), restantes
+
+
 def main():
+    _columna_vector()
     _similar_to()
     _using()
     _score()
