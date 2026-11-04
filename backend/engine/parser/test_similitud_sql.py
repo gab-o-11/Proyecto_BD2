@@ -197,8 +197,70 @@ def _columna_vector():
         assert not any(nombre.startswith("img") for nombre in restantes), restantes
 
 
+def _literal(vector):
+    partes = []
+    for valor in vector:
+        partes.append(str(float(valor)))
+    return "VECTOR(" + ", ".join(partes) + ")"
+
+
+def _datos(n=120, dimension=6, semilla=0):
+    azar = np.random.default_rng(semilla)
+    centros = azar.random((5, dimension)) * 4
+    return centros[azar.integers(0, 5, n)] + azar.normal(0, 0.2, (n, dimension))
+
+
+def _tabla_con_datos(executor, datos):
+    _ejecutar(executor, f"CREATE TABLE img (id INT PRIMARY KEY, grupo INT, v VECTOR({datos.shape[1]}));")
+    filas = []
+    for i, vector in enumerate(datos):
+        filas.append(f"({i}, {i % 3}, {_literal(vector)})")
+    _ejecutar(executor, "INSERT INTO img VALUES " + ", ".join(filas) + ";")
+
+
+def _crear_indices():
+    with tempfile.TemporaryDirectory(prefix="test_similitud_") as carpeta:
+        catalogo = {}
+        executor = Executor(catalogo, data_dir=carpeta)
+        _error(executor, "CREATE TABLE _x (id INT, v VECTOR(2)); CREATE INDEX i ON _x (v) USING IVF;", "IVF necesita datos")
+        _tabla_con_datos(executor, _datos())
+        mensaje = _ejecutar(executor, "CREATE INDEX ih ON img (v) USING HNSW WITH (METRIC=cosine, M=8, EF_CONSTRUCTION=32);")["message"]
+        assert "120 entradas" in mensaje and "HNSW" in mensaje
+        _ejecutar(executor, "CREATE INDEX iv ON img (v) USING IVF WITH (METRIC=euclidean, LISTS=10);")
+        _ejecutar(executor, "CREATE INDEX idef ON img (v) USING HNSW WITH (METRIC=dot);")
+        tabla = catalogo["img"]
+        assert tabla.indices_vectoriales["ih"].estructura.m == 8
+        assert tabla.indices_vectoriales["iv"].estructura.lists == 10
+        assert tabla.indices_vectoriales["idef"].metrica == "dot"
+        assert "iv" in [i["name"] for i in table_info(tabla)["indexes"]]
+        _error(executor, "CREATE INDEX ih ON img (v) USING IVF;", "ya existe")
+        _error(executor, "CREATE INDEX otro ON img (v) USING HNSW WITH (METRIC=cosine);", "ya tiene")
+        _error(executor, "CREATE INDEX x ON img (grupo) USING HNSW;", "no es una columna VECTOR")
+        _error(executor, "CREATE INDEX x ON img (v) USING BPLUS;", "solo admite índices IVF o HNSW")
+        _error(executor, "CREATE INDEX x ON img (v);", "solo admite índices IVF o HNSW")
+        _error(executor, "CREATE INDEX x ON img (v) USING IVF WITH (LISTS=9999);", "lists debe estar")
+        _error(executor, "CREATE INDEX x ON img (v) USING HNSW WITH (METRIC=euclidean, M=1);", "m debe ser")
+        ruta = tabla.indices_vectoriales["iv"].ruta
+        assert os.path.exists(ruta)
+        vecinos = tabla.indices_vectoriales["ih"].estructura.vecinos
+        for t in catalogo.values():
+            t.cerrar()
+        catalogo = _load_tables(carpeta)
+        tabla = catalogo["img"]
+        assert sorted(tabla.indices_vectoriales) == ["idef", "ih", "iv"]
+        assert tabla.indices_vectoriales["ih"].estructura.vecinos == vecinos
+        assert tabla.indices_vectoriales["iv"].metrica == "euclidean" and tabla.indices_vectoriales["iv"].estructura.lists == 10
+        executor = Executor(catalogo, data_dir=carpeta)
+        _ejecutar(executor, "DROP INDEX iv;")
+        assert not os.path.exists(ruta) and "iv" not in tabla.indices_vectoriales
+        _error(executor, "DROP INDEX iv;", "no existe")
+        _ejecutar(executor, "DROP TABLE img;")
+        assert not any(nombre.startswith("img") for nombre in os.listdir(carpeta))
+
+
 def main():
     _columna_vector()
+    _crear_indices()
     _similar_to()
     _using()
     _score()
