@@ -6,6 +6,7 @@ import numpy as np
 
 from .exacta import knn_exacto, recall_at_k
 from .almacen import AlmacenVectores
+from .kmeans import centroides_cercanos, kmeans
 from .metricas import COSINE, DOT, EUCLIDEAN, distancia, distancias, score, validar_metrica
 
 
@@ -93,11 +94,37 @@ def _almacen():
         _falla(lambda: AlmacenVectores(ruta, 0), "dimensión no positiva")
 
 
+def _kmeans():
+    azar = np.random.default_rng(1)
+    centros = np.array([[0, 0], [20, 0], [0, 20], [20, 20]], dtype=np.float32)
+    datos = (centros[np.repeat(np.arange(4), 50)] + azar.normal(0, 0.5, (200, 2))).astype(np.float32)
+    centroides, asignaciones = kmeans(datos, 4, semilla=3)
+    grupos = [set(asignaciones[i * 50:(i + 1) * 50].tolist()) for i in range(4)]
+    if all(len(g) == 1 for g in grupos):
+        for i, grupo in enumerate(grupos):
+            assert np.linalg.norm(centroides[grupo.pop()] - centros[i]) < 1
+    assert len(set(asignaciones.tolist())) == 4
+    uno, solo = kmeans(datos, 1)
+    assert set(solo.tolist()) == {0} and np.allclose(uno[0], datos.mean(axis=0), atol=1e-3)
+    tope, _ = kmeans(datos, 4, iteraciones=1)
+    assert tope.shape == (4, 2)
+    iguales, grupos_iguales = kmeans(np.ones((10, 2), dtype=np.float32), 3)
+    assert iguales.shape == (3, 2) and len(grupos_iguales) == 10
+    _, angulos = kmeans(np.array([[1, 0], [50, 1], [0, 1], [1, 50]], dtype=np.float32), 2, COSINE, semilla=2)
+    assert angulos[0] == angulos[1] and angulos[2] == angulos[3] and angulos[0] != angulos[2]
+    assert centroides_cercanos([0, 0], centros, EUCLIDEAN, 2).tolist() == [0, 1]
+    _falla(lambda: kmeans(datos, 0), "k no positivo")
+    _falla(lambda: kmeans(datos, 500), "k mayor que los datos")
+    _falla(lambda: kmeans(np.empty((0, 2)), 1), "sin datos")
+    _falla(lambda: kmeans(datos, 2, DOT), "producto punto")
+
+
 def main():
     _metricas()
     _exacta()
     _almacen()
-    print("OK: métricas, búsqueda exacta, almacén de vectores")
+    _kmeans()
+    print("OK: métricas, búsqueda exacta, almacén de vectores, k-means")
 
 
 if __name__ == "__main__":
