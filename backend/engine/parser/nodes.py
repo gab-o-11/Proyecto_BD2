@@ -30,6 +30,12 @@ class Intersection(Node):
     polygon: Polygon
 
 
+@dataclass(frozen=True)
+class SimilarTo(Node):
+    query: str
+    k: int
+
+
 def expression_columns(expression):
     if isinstance(expression, Distance):
         return [operand for operand in (expression.left, expression.right) if isinstance(operand, str)]
@@ -99,6 +105,8 @@ def condition_columns(condition):
         return condition_columns(condition.condition)
     if isinstance(condition, Intersection):
         return [condition.column]
+    if isinstance(condition, SimilarTo):
+        return []
     columnas = expression_columns(condition.column)
     if isinstance(getattr(condition, "value", None), ColumnRef):
         columnas.append(condition.value.name)

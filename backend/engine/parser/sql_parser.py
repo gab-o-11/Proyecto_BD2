@@ -2,7 +2,7 @@ import math
 import sys
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import Analyze, And, BeginTransaction, Between, ColumnDef, ColumnRef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, Update, aggregate_name
+from .nodes import Analyze, And, BeginTransaction, Between, ColumnDef, ColumnRef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, SimilarTo, Update, aggregate_name
 
 
 class ParseError(Exception):
@@ -155,6 +155,8 @@ class Parser:
             order_by = self._expression()
             if isinstance(order_by, Intersection):
                 raise ParseError(f"Línea {self.previous.line}: INTERSECTA solo se admite en WHERE")
+            if isinstance(order_by, SimilarTo):
+                raise ParseError(f"Línea {self.previous.line}: SIMILAR_TO solo se admite en WHERE")
             order_desc = self._match(TokenType.DESC)
             if not order_desc:
                 self._match(TokenType.ASC)
@@ -186,6 +188,8 @@ class Parser:
             self._expect(TokenType.RPAREN, "')'")
             self._expect(TokenType.RPAREN, "')'")
             return Intersection(columna, Polygon(tuple(vertices)))
+        if nombre.upper() == "SIMILAR_TO":
+            return self._similar_to()
         if nombre.upper() != "DISTANCIA":
             raise ParseError(f"Línea {self.previous.line}: función espacial desconocida '{nombre}'")
         izquierda = self._point_operand()
@@ -199,6 +203,21 @@ class Parser:
                 raise ParseError(f"Línea {token.line}: métrica desconocida '{metrica}'")
         self._expect(TokenType.RPAREN, "')'")
         return Distance(izquierda, derecha, metrica)
+
+    def _similar_to(self):
+        token = self._expect(TokenType.STRING, "archivo de consulta entre comillas")
+        consulta = token.lexeme[1:-1].replace("''", "'")
+        self._expect(TokenType.COMMA, "','")
+        parametro = self._expect(TokenType.IDENTIFIER, "k=<entero>")
+        if parametro.lexeme.lower() != "k":
+            raise ParseError(f"Línea {parametro.line}: SIMILAR_TO requiere k=<entero>")
+        self._expect(TokenType.EQUAL, "'=' después de k")
+        token = self._expect(TokenType.INT, "entero positivo para k")
+        k = int(token.lexeme)
+        if not 1 <= k <= sys.maxsize:
+            raise ParseError(f"Línea {token.line}: k debe ser un entero positivo")
+        self._expect(TokenType.RPAREN, "')'")
+        return SimilarTo(consulta, k)
 
     def _point_operand(self):
         if self._check(TokenType.POINT):
@@ -435,7 +454,7 @@ class Parser:
 
     def _predicate(self):
         columna = self._expression()
-        if isinstance(columna, Intersection):
+        if isinstance(columna, (Intersection, SimilarTo)):
             return columna
 
         if self._match(*COMPARISON_OPS):

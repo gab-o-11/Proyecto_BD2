@@ -125,6 +125,9 @@ class PrintVisitor(Visitor):
     def visit_Intersection(self, node):
         return f"intersecta({node.column}, {self.visit_Polygon(node.polygon)})"
 
+    def visit_SimilarTo(self, node):
+        return f"SIMILAR_TO({self._literal(node.query)}, k={node.k})"
+
     def visit_Distance(self, node):
         izquierda = node.left.accept(self) if isinstance(node.left, Point) else node.left
         derecha = node.right.accept(self) if isinstance(node.right, Point) else node.right
