@@ -8,6 +8,7 @@ from .exacta import knn_exacto, recall_at_k
 from .almacen import AlmacenVectores
 from .kmeans import centroides_cercanos, kmeans
 from .ivf import IndiceIVF, lists_por_defecto
+from .hnsw import IndiceHNSW
 from .metricas import COSINE, DOT, EUCLIDEAN, distancia, distancias, score, validar_metrica
 
 
@@ -186,6 +187,53 @@ def _ivf_mantenimiento():
         assert os.path.exists(ruta) and not os.path.exists(ruta + ".tmp")
 
 
+def _recall(indice, consultas, exactos, **opciones):
+    total = 0.0
+    for consulta, exacto in zip(consultas, exactos):
+        aproximado = indice.buscar(consulta, 10, **opciones)
+        ids_exactos = []
+        for _, identificador in exacto:
+            ids_exactos.append(identificador)
+        ids_aproximados = []
+        for _, identificador in aproximado:
+            ids_aproximados.append(identificador)
+        total += recall_at_k(ids_exactos, ids_aproximados)
+    return total / len(exactos)
+
+
+def _hnsw():
+    datos = _vectores(1500, 16)
+    consultas = _vectores(30, 16, semilla=9)
+    with tempfile.TemporaryDirectory(prefix="test_vectorial_") as carpeta:
+        for metrica, minimo in ((EUCLIDEAN, 0.75), (COSINE, 0.95), (DOT, 0.95)):
+            almacen = _cargar_almacen(carpeta, datos, "hnsw_" + metrica)
+            indice = IndiceHNSW(almacen, metrica)
+            indice.construir()
+            exactos = []
+            for consulta in consultas:
+                exactos.append(knn_exacto(consulta, datos, 10, metrica))
+            alto = _recall(indice, consultas, exactos, ef_search=200)
+            assert alto >= minimo, (metrica, alto)
+            assert alto >= _recall(indice, consultas, exactos, ef_search=10) - 0.01
+            assert len(indice.buscar(consultas[0], 10, ef_search=1)) == 10
+            for capas in indice.vecinos.values():
+                for capa, lista in enumerate(capas):
+                    assert len(lista) <= indice._limite(capa)
+                    assert len(lista) == len(set(lista))
+            assert indice.nivel_maximo == len(indice.vecinos[indice.entrada]) - 1
+            indice.insertar(0)
+            assert len(indice.vecinos) == 1500
+        vacio = AlmacenVectores(os.path.join(carpeta, "vacio_hnsw"), 16)
+        sin_datos = IndiceHNSW(vacio, COSINE)
+        sin_datos.construir()
+        assert sin_datos.buscar(consultas[0], 3) == []
+        _falla(lambda: sin_datos.buscar(consultas[0], 0), "k no positivo")
+        _falla(lambda: sin_datos.buscar(consultas[0], 3, ef_search=0), "ef_search no positivo")
+        _falla(lambda: IndiceHNSW(vacio, COSINE, m=1), "m menor que 2")
+        _falla(lambda: IndiceHNSW(vacio, COSINE, ef_construccion=0), "ef_construccion no positivo")
+        assert IndiceHNSW(vacio, COSINE).m_max0 == 32
+
+
 def main():
     _metricas()
     _exacta()
@@ -193,7 +241,8 @@ def main():
     _kmeans()
     _ivf()
     _ivf_mantenimiento()
-    print("OK: métricas, búsqueda exacta, almacén de vectores, k-means, IVF, mantenimiento de IVF")
+    _hnsw()
+    print("OK: métricas, búsqueda exacta, almacén de vectores, k-means, IVF, mantenimiento de IVF, HNSW")
 
 
 if __name__ == "__main__":
