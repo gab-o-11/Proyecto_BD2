@@ -23,10 +23,13 @@ DROP TABLE [IF EXISTS] clientes;
 | `FLOAT` | 4 B | |
 | `VARCHAR(n)` | 4·n B | 32 B si no se indica `n` |
 | `DATE` | como texto | formato `YYYY-MM-DD`, validado |
+| `TEXT` | 12 B + el texto | sin límite de longitud; el contenido va a `tabla.txt` ([Almacenamiento](04-almacenamiento.md#columnas-text)) |
 | `POINT` | 16 B | `POINT(latitud, longitud)`; recibe un R-Tree automático |
 
 - `USING` elige el **índice principal**: `HASH` (por defecto), `BPLUS` o `BPLUS_CLUSTERED`.
-- El índice principal va sobre la columna `PRIMARY KEY` o, si no hay, sobre la primera columna que no sea `POINT`.
+- El índice principal va sobre la columna `PRIMARY KEY` o, si no hay, sobre la primera columna que no sea `POINT` ni `TEXT`.
+- `TEXT` no puede ser `PRIMARY KEY` ni tener índices `HASH` o `BPLUS`. Admite `LIKE`, `=`, `IS NULL`, `ORDER BY` y `GROUP BY` como un `VARCHAR`.
+- Al importar un CSV, una columna de texto con algún valor de más de 32 bytes se crea como `TEXT`.
 - `PRIMARY KEY` exige valores únicos y no nulos. `NOT NULL` impide valores nulos.
 
 ## Índices secundarios

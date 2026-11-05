@@ -1,6 +1,6 @@
 # 💾 Almacenamiento
 
-Los archivos se dividen en **páginas de 4096 bytes** y los registros son de tamaño fijo, empaquetados con `struct`.
+Los archivos se dividen en **páginas de 4096 bytes** y los registros son de tamaño fijo, empaquetados con `struct`. Los textos largos (`TEXT`) viven en un archivo aparte.
 
 ## Formato de registro
 
@@ -8,7 +8,7 @@ Los archivos se dividen en **páginas de 4096 bytes** y los registros son de tam
 | col 1 | col 2 | ... | col n | mapa de NULL (8 B) |
 ```
 
-- Cada columna ocupa siempre su tamaño: `INT` 4 B, `FLOAT` 4 B, `VARCHAR(n)` 4·n B, `POINT` 16 B.
+- Cada columna ocupa siempre su tamaño: `INT` 4 B, `FLOAT` 4 B, `VARCHAR(n)` 4·n B, `POINT` 16 B, `TEXT` 12 B (una referencia, ver [Columnas TEXT](#columnas-text)).
 - El **mapa de NULL** tiene un bit por columna: si el bit *i* está en 1, la columna *i* es nula y su espacio guarda un relleno.
 - Las tablas creadas antes de este formato se abren sin el mapa y rechazan `NULL`.
 
@@ -87,6 +87,22 @@ flowchart LR
 Las mediciones están en [benchmarks](../benchmarks/README.md):
 
 ![Heap vs. secuencial](../benchmarks/relational_results/storage_times.png)
+
+## Columnas TEXT
+
+Un registro de tamaño fijo no puede guardar documentos: una página tiene 4096 bytes y una noticia suele pasar de 3 KB. Las columnas `TEXT` guardan en el registro solo una **referencia** y el contenido va a un archivo aparte, `tabla.txt`:
+
+```
+registro (.dat / .seq):  | id | contenido → (offset Q, longitud I) | ... | mapa de NULL |
+tabla.txt:               [ usados Q | basura Q ][ texto 1 ][ texto 2 ][ texto 3 ] ...
+```
+
+- **Insertar** escribe el texto al final de `tabla.txt` y guarda `(offset, longitud)` en el registro.
+- **Leer** hace un `seek` al offset y lee la longitud. Las páginas de 4096 bytes que toca cuentan en `EXPLAIN ANALYZE` como las de cualquier otro archivo.
+- **Borrar** o **cambiar** un texto no reescribe nada: suma su longitud al contador de basura. Un `UPDATE` que no cambia el texto reutiliza la referencia.
+- Cuando la basura pasa del **30 %** de los bytes usados, la tabla **compacta**: copia los textos vivos a un archivo nuevo y reescribe la referencia de cada registro en su mismo lugar. Los RID no cambian, así que ningún índice se toca.
+
+La referencia viaja dentro del registro, por eso funciona igual en el heap y en el archivo secuencial, aunque este se reorganice. `ANALYZE` guarda la longitud promedio de cada columna `TEXT` y el planificador la suma al ancho de la fila.
 
 ---
 
