@@ -104,7 +104,7 @@ class AlmacenVectores:
         return identificador
 
     def matriz(self):
-        return self._vectores
+        return np.asarray(self._vectores)
 
     def vector(self, identificador):
         return np.array(self._vectores[identificador])

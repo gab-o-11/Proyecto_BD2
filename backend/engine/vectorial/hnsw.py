@@ -5,7 +5,7 @@ import random
 
 import numpy as np
 
-from .metricas import distancias, validar_metrica
+from .metricas import distancias, distancias_entre, validar_metrica
 
 EF_SEARCH = 40
 
@@ -82,20 +82,29 @@ class IndiceHNSW:
             for _, identificador in candidatos:
                 elegidos.append(identificador)
             return elegidos
-        matriz = self.almacen.matriz()
-        elegidos = []
-        descartados = []
+        identificadores = []
+        valores = []
         for valor, identificador in candidatos:
+            valores.append(valor)
+            identificadores.append(identificador)
+        valores = np.array(valores, dtype=np.float32)
+        cruzadas = distancias_entre(self.almacen.matriz()[identificadores], self.metrica)
+        descartado = np.zeros(len(identificadores), dtype=bool)
+        elegidos = []
+        posiciones = []
+        for posicion in range(len(identificadores)):
+            if descartado[posicion]:
+                continue
+            elegidos.append(identificadores[posicion])
+            posiciones.append(posicion)
+            if len(elegidos) == m:
+                return elegidos
+            descartado |= cruzadas[posicion] <= valores
+        descartado[posiciones] = False
+        for posicion in np.flatnonzero(descartado).tolist():
             if len(elegidos) == m:
                 break
-            if not elegidos or (distancias(matriz[identificador], matriz[elegidos], self.metrica) > valor).all():
-                elegidos.append(identificador)
-            else:
-                descartados.append(identificador)
-        for identificador in descartados:
-            if len(elegidos) == m:
-                break
-            elegidos.append(identificador)
+            elegidos.append(identificadores[posicion])
         return elegidos
 
     def _recortar(self, identificador, capa):

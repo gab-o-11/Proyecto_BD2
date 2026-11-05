@@ -9,7 +9,7 @@ from .almacen import AlmacenVectores
 from .kmeans import centroides_cercanos, kmeans
 from .ivf import IndiceIVF, lists_por_defecto
 from .hnsw import IndiceHNSW
-from .metricas import COSINE, DOT, EUCLIDEAN, distancia, distancias, score, validar_metrica
+from .metricas import COSINE, DOT, EUCLIDEAN, distancia, distancias, distancias_entre, score, validar_metrica
 
 
 def _cerca(a, b, tolerancia=1e-5):
@@ -274,7 +274,20 @@ def _hnsw_mantenimiento():
         assert IndiceHNSW.abrir(sin_datos.almacen, ruta_vacia).entrada is None
 
 
+def _distancias_entre():
+    azar = np.random.default_rng(3)
+    matriz = azar.normal(0, 1, (40, 16)).astype(np.float32)
+    matriz[5] = 0
+    matriz[9] = matriz[8]
+    for metrica in (EUCLIDEAN, COSINE, DOT):
+        cruzadas = distancias_entre(matriz, metrica)
+        assert cruzadas.shape == (40, 40)
+        for fila in range(40):
+            assert np.allclose(cruzadas[fila], distancias(matriz[fila], matriz, metrica), atol=1e-3), (metrica, fila)
+
+
 def main():
+    _distancias_entre()
     _metricas()
     _exacta()
     _almacen()
