@@ -402,11 +402,64 @@ def _explain():
         assert "Seq Scan on grande" in texto
 
 
+def _mantenimiento():
+    datos = _datos(150, 6, semilla=4).astype(np.float32)
+    with tempfile.TemporaryDirectory(prefix="test_similitud_") as carpeta:
+        catalogo = {}
+        executor = Executor(catalogo, data_dir=carpeta)
+        _tabla_con_datos(executor, datos)
+        _ejecutar(executor, "CREATE INDEX ih ON img (v) USING HNSW WITH (METRIC=euclidean);")
+        _ejecutar(executor, "CREATE INDEX iv ON img (v) USING IVF WITH (METRIC=euclidean, LISTS=12);")
+        lejos = [90.0, 90.0, 90.0, 90.0, 90.0, 90.0]
+        cerca = [40.0, 40.0, 40.0, 40.0, 40.0, 40.0]
+        busquedas = (
+            "USING HNSW WITH METRIC=euclidean, EF_SEARCH=200",
+            "USING IVF WITH METRIC=euclidean, PROBES=12",
+            "USING SEQ WITH METRIC=euclidean",
+        )
+
+        def mejor(vector, k=1):
+            salida = []
+            for busqueda in busquedas:
+                resultado = _ejecutar(executor, f"SELECT id FROM img WHERE SIMILAR_TO({_literal(vector)}, k={k}) {busqueda};")
+                salida.append(_ids(resultado))
+            return salida
+
+        _ejecutar(executor, f"INSERT INTO img VALUES (500, 1, {_literal(lejos)});")
+        assert mejor(lejos) == [[500], [500], [500]]
+        assert 500 in [fila["id"] for fila in _ejecutar(executor, "SELECT id FROM img WHERE id = 500;")["rows"]]
+        _ejecutar(executor, f"UPDATE img SET v = {_literal(cerca)} WHERE id = 500;")
+        assert mejor(cerca) == [[500], [500], [500]]
+        _ejecutar(executor, "UPDATE img SET grupo = 2 WHERE id = 500;")
+        assert mejor(cerca) == [[500], [500], [500]]
+        _ejecutar(executor, "DELETE FROM img WHERE id = 500;")
+        for ids in mejor(cerca, 3):
+            assert 500 not in ids and len(ids) == 3
+        _ejecutar(executor, f"INSERT INTO img VALUES (501, 1, {_literal(lejos)});")
+        assert mejor(lejos) == [[501], [501], [501]]
+        _ejecutar(executor, "UPDATE img SET v = NULL WHERE id = 501;")
+        for ids in mejor(lejos):
+            assert 501 not in ids
+        _ejecutar(executor, f"INSERT INTO img VALUES (502, 1, {_literal(lejos)});")
+        reabierto = _load_tables(carpeta)
+        executor = Executor(reabierto, data_dir=carpeta)
+        assert mejor(lejos) == [[502], [502], [502]]
+        _ejecutar(executor, "DELETE FROM img WHERE id = 502;")
+        for t in reabierto.values():
+            t.cerrar()
+        catalogo = _load_tables(carpeta)
+        executor = Executor(catalogo, data_dir=carpeta)
+        for ids in mejor(lejos):
+            assert 502 not in ids
+        assert sorted(catalogo["img"].indices_vectoriales["iv"].estructura.indexados) == catalogo["img"].almacenes["v"].ids_vivos().tolist()
+
+
 def main():
     _columna_vector()
     _crear_indices()
     _busquedas()
     _explain()
+    _mantenimiento()
     _similar_to()
     _using()
     _score()
