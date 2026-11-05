@@ -1,7 +1,9 @@
+import importlib
 import json
 import math
 import os
 import tempfile
+from unittest.mock import patch
 
 import numpy as np
 
@@ -11,6 +13,7 @@ from ..catalog import _load_tables
 from ..parser.executor import Executor
 from ..parser.scanner import Scanner
 from ..parser.sql_parser import Parser
+from ..transactions import TransactionManager
 
 CENTROIDES = np.array([[0, 0], [10, 0], [0, 10]], dtype=np.float32)
 
@@ -188,10 +191,51 @@ def _carga():
             catalogo[nombre].cerrar()
 
 
+def _api():
+    with tempfile.TemporaryDirectory(prefix="test_extract_") as raiz:
+        media = os.path.join(raiz, "media")
+        datos = os.path.join(raiz, "datos")
+        os.makedirs(media)
+        os.makedirs(datos)
+        _escribir(media, "a.json", [[0, 0], [10, 0], [10, 0], [0, 10]])
+        _escribir(media, "b.json", [[0, 0], [0, 0], [0, 0], [0, 0]])
+        _escribir(raiz, "secreto.json", [[0, 0]])
+        with patch("engine.catalog.create_catalog", return_value={}):
+            api = importlib.import_module("api.main")
+        api.catalog = {}
+        api.DATA_DIR = datos
+        api.transaction_manager = TransactionManager()
+        api.multimedia = ColeccionesMultimedia(media)
+        creada = api.query(api.QueryBody(sql="CREATE TABLE img (id INT PRIMARY KEY, ruta VARCHAR(40), v VECTOR(3)); INSERT INTO img (id, ruta) VALUES (1, 'a.json'), (2, 'b.json');"))
+        assert "error" not in creada, creada
+        consulta = api.QueryBody(sql="SELECT id, SIMILARITY_SCORE() AS score FROM img WHERE SIMILAR_TO('a.json', k=1) USING SEQ;")
+        assert "no tiene características" in api.query(consulta)["error"]
+        cuerpo = api.FeaturesBody(path_column="ruta", descriptor_id="json-2")
+        assert "no hay un extractor" in api.cargar_caracteristicas("img", cuerpo)["error"]
+        assert "no existe" in api.cargar_caracteristicas("nada", cuerpo)["error"]
+        assert not api.transaction_manager.transactions
+        api.multimedia.registrar(ExtractorJson(), CENTROIDES)
+        cargada = api.cargar_caracteristicas("img", cuerpo)
+        assert cargada["rowsLoaded"] == 2, cargada
+        respuesta = api.query(consulta)
+        assert respuesta["rows"][0]["id"] == 1, respuesta
+        assert abs(respuesta["rows"][0]["score"] - 1.0) < 1e-5, respuesta
+        fuera = api.query(api.QueryBody(sql="SELECT id FROM img WHERE SIMILAR_TO('../secreto.json', k=1) USING SEQ;"))
+        assert "fuera de la carpeta" in fuera["error"], fuera
+        faltante = api.query(api.QueryBody(sql="SELECT id FROM img WHERE SIMILAR_TO('nada.json', k=1) USING SEQ;"))
+        assert "no existe" in faltante["error"], faltante
+        plan = api.query(api.QueryBody(sql="EXPLAIN SELECT id FROM img WHERE SIMILAR_TO('a.json', k=1) USING SEQ;"))
+        assert "error" not in plan, plan
+        assert not api.transaction_manager.transactions
+        for nombre in api.catalog:
+            api.catalog[nombre].cerrar()
+
+
 def main():
     _resolver()
     _extraccion()
     _carga()
+    _api()
     print("OK: ExtractFeatures y carga de la colección")
 
 

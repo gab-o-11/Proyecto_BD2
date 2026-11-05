@@ -343,15 +343,23 @@ def _busquedas():
         assert _ejecutar(executor, "SELECT id FROM vacia WHERE SIMILAR_TO(VECTOR(1, 2), k=3) USING HNSW;")["rows"] == []
         rutas = []
 
-        def vectorizador(ruta):
-            rutas.append(ruta)
+        def vectorizador(tabla, ruta):
+            rutas.append((tabla.name, ruta))
             return consulta
+
+        def sin_archivo(tabla, ruta):
+            raise FileNotFoundError(f"el archivo '{ruta}' no se pudo leer")
+
+        def fuera(tabla, ruta):
+            raise ValueError(f"la ruta '{ruta}' está fuera de la carpeta multimedia")
 
         con_archivo = Executor(catalogo, data_dir=carpeta, vectorizador=vectorizador)
         resultado = _ejecutar(con_archivo, "SELECT id FROM img WHERE SIMILAR_TO('foto.jpg', k=1) USING SEQ;")
-        assert rutas == ["foto.jpg"] and _ids(resultado) == [7]
-        malo = Executor(catalogo, data_dir=carpeta, vectorizador=lambda ruta: [1.0, 2.0])
+        assert rutas == [("img", "foto.jpg")] and _ids(resultado) == [7]
+        malo = Executor(catalogo, data_dir=carpeta, vectorizador=lambda tabla, ruta: [1.0, 2.0])
         _error(malo, "SELECT id FROM img WHERE SIMILAR_TO('foto.jpg', k=1) USING SEQ;", "dimensión 6")
+        _error(Executor(catalogo, data_dir=carpeta, vectorizador=sin_archivo), "SELECT id FROM img WHERE SIMILAR_TO('nada.jpg', k=1);", "no se pudo leer")
+        _error(Executor(catalogo, data_dir=carpeta, vectorizador=fuera), "SELECT id FROM img WHERE SIMILAR_TO('../x.jpg', k=1);", "fuera de la carpeta")
 
 
 def _texto_plan(resultado):

@@ -346,7 +346,7 @@ class Executor(Visitor):
             raise SemanticError(f"el alias '{puntaje}' coincide con una columna de '{tabla.name}'")
         columna = next(iter(almacenes))
         almacen = almacenes[columna]
-        consulta = self._vector_consulta(similar.query, almacen.dimension)
+        consulta = self._vector_consulta(tabla, similar.query, almacen.dimension)
         opciones = dict(node.search_options)
         if "PROBES" in opciones and node.index_method != "IVF":
             raise SemanticError("PROBES solo se admite con USING IVF")
@@ -362,14 +362,17 @@ class Executor(Visitor):
             raiz = planner.filtrar(raiz, predicado, selectividad=seleccion)
         return raiz, tabla
 
-    def _vector_consulta(self, consulta, dimension):
+    def _vector_consulta(self, tabla, consulta, dimension):
         if isinstance(consulta, VectorLiteral):
             with np.errstate(over="ignore"):
                 vector = np.array(consulta.values, dtype=np.float32)
         elif self.vectorizador is None:
             raise SemanticError("no hay un extractor configurado para consultar por archivo; usa SIMILAR_TO(VECTOR(...), k=...)")
         else:
-            vector = np.asarray(self.vectorizador(consulta), dtype=np.float32)
+            try:
+                vector = np.asarray(self.vectorizador(tabla, consulta), dtype=np.float32)
+            except (ValueError, OSError) as error:
+                raise SemanticError(str(error))
         if vector.shape != (dimension,):
             raise SemanticError(f"la consulta debe ser un vector de dimensión {dimension} y llegó {vector.shape}")
         if not np.isfinite(vector).all():

@@ -12,13 +12,16 @@ from engine.parser.executor import Executor
 from engine.transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from engine.catalog import StorageTable
 from engine.importer import CSVImportError, parse_csv
+from engine.multimedia.extract_features import ColeccionesMultimedia
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_DIR = os.path.dirname(BACKEND_DIR)
 DATA_DIR = os.environ.get("BD2_DATA_DIR") or os.path.join(PROJECT_DIR, "data", "runtime")
+MULTIMEDIA_DIR = os.environ.get("BD2_MULTIMEDIA_DIR") or os.path.join(PROJECT_DIR, "data", "multimedia")
 
 catalog = create_catalog(DATA_DIR)
 transaction_manager = TransactionManager()
+multimedia = ColeccionesMultimedia(MULTIMEDIA_DIR)
 
 app = FastAPI(title="MiniGestor BD2")
 
@@ -33,6 +36,11 @@ app.add_middleware(
 class QueryBody(BaseModel):
     sql: str
     parameters: dict[str, tuple[float, float]] = Field(default_factory=dict)
+
+
+class FeaturesBody(BaseModel):
+    path_column: str
+    descriptor_id: str
 
 
 def _tipo(sentencia):
@@ -109,7 +117,7 @@ def query(body: QueryBody):
     if activa:
         return {"error": "BEGIN y END TRANSACTION deben enviarse en la misma consulta", "plan": [], "statements": []}
 
-    executor = Executor(catalog, transaction_manager, DATA_DIR, parameters=body.parameters)
+    executor = Executor(catalog, transaction_manager, DATA_DIR, parameters=body.parameters, vectorizador=multimedia.vectorizar)
     salidas = executor.run(sentencias)
     elapsed = round((time.monotonic() - start) * 1000, 1)
 
@@ -248,6 +256,22 @@ async def import_table(
         }
     except (CSVImportError, ValueError, TypeError) as error:
         return {"error": str(error)}
+
+
+@app.post("/api/tables/{nombre}/features")
+def cargar_caracteristicas(nombre: str, body: FeaturesBody):
+    if nombre not in catalog:
+        return {"error": f"la tabla '{nombre}' no existe"}
+    tabla = catalog[nombre]
+    transaction_manager.begin()
+    try:
+        transaction_manager.acquire(Resource("table", nombre), LockMode.PX)
+        cargadas = multimedia.cargar(tabla, body.path_column, body.descriptor_id)
+    except (ValueError, OSError, LockError, TransactionError) as error:
+        return {"error": str(error)}
+    finally:
+        transaction_manager.end()
+    return {"message": f"características cargadas en '{nombre}'", "rowsLoaded": cargadas, "table": table_info(tabla)}
 
 
 @app.post("/api/reset")
