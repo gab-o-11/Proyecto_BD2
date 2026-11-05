@@ -70,6 +70,7 @@ def _patron_like(patron):
     return re.compile("".join(partes), re.DOTALL)
 
 MEM_BUDGET = 32
+CADENAS = {"str", "text"}
 
 class Table(SpatialTable):
 
@@ -430,7 +431,7 @@ class Executor(Visitor):
             raise SemanticError("JOIN requiere nombres o alias de tabla distintos")
         columnas = [prefijo + "." + c for tabla, prefijo in lados for c in tabla.columns]
         fuente = Table(" JOIN ".join(prefijo for _, prefijo in lados), columnas)
-        fuente.column_types = {prefijo + "." + c: {"int": "INT", "float": "FLOAT", "str": "VARCHAR", "point": "POINT"}[self._tipo_columna(tabla, c)] for tabla, prefijo in lados for c in tabla.columns}
+        fuente.column_types = {prefijo + "." + c: {"int": "INT", "float": "FLOAT", "str": "VARCHAR", "text": "TEXT", "point": "POINT"}[self._tipo_columna(tabla, c)] for tabla, prefijo in lados for c in tabla.columns}
         fuente.spatial_sources = {prefijo + "." + c: (tabla.name, c) for tabla, prefijo in lados for c in tabla.columns if self._tipo_columna(tabla, c) == "point"}
         fuente.estadisticas = {"columnas": {prefijo + "." + c: info for tabla, prefijo in lados for c, info in ((getattr(tabla, "estadisticas", None) or {}).get("columnas") or {}).items()}}
         fuente.column_aliases = {}
@@ -467,7 +468,7 @@ class Executor(Visitor):
                 raise SemanticError(f"el ON de '{prefijo}' debe comparar una columna de '{prefijo}' con una de las tablas anteriores ({', '.join(sorted(anteriores))})")
             tipo_anterior = self._tipo_columna(fuente, clave_anterior)
             tipo_nuevo = self._tipo_columna(fuente, clave_nueva)
-            if tipo_anterior != tipo_nuevo and {tipo_anterior, tipo_nuevo} != {"int", "float"}:
+            if tipo_anterior != tipo_nuevo and {tipo_anterior, tipo_nuevo} not in ({"int", "float"}, CADENAS):
                 raise SemanticError("las columnas de JOIN deben tener tipos compatibles")
             distintos = (self._distintos(lados, clave_anterior), self._distintos(lados, clave_nueva))
             raiz = planner.unir(raiz, acceso(tabla, prefijo), clave_anterior, clave_nueva, MEM_BUDGET, distintos)
@@ -727,7 +728,7 @@ class Executor(Visitor):
             negado = condicion.negated
             return (lambda fila: (extraer(fila) is None) != negado), (1.0 - fraccion if negado else fraccion)
         if isinstance(condicion, Like):
-            if tipo != "str":
+            if tipo not in CADENAS:
                 raise SemanticError(f"LIKE requiere una columna de texto y '{columna}' no lo es")
             patron = _patron_like(condicion.pattern)
             negado = condicion.negated
@@ -766,7 +767,7 @@ class Executor(Visitor):
     def _comparar_columnas(self, tabla, condicion, extraer, tipo, columna):
         otra, tipo_otra, columna_otra = self._expresion_condicion(tabla, condicion.value.name)
         numericos = {"int", "float"}
-        if tipo != tipo_otra and not (tipo in numericos and tipo_otra in numericos):
+        if tipo != tipo_otra and not (tipo in numericos and tipo_otra in numericos) and not (tipo in CADENAS and tipo_otra in CADENAS):
             raise SemanticError(f"no se puede comparar '{condicion.column}' con '{condicion.value.name}': tipos distintos")
         if tipo == "point":
             raise SemanticError("las columnas POINT solo se comparan con distancia() o intersecta()")
@@ -968,6 +969,8 @@ class Executor(Visitor):
             return "float"
         if tipo == "POINT":
             return "point"
+        if tipo == "TEXT":
+            return "text"
         return "str"
 
     def _convertir(self, tabla, columna, valor):
@@ -999,7 +1002,7 @@ class Executor(Visitor):
                 return struct.unpack("f", struct.pack("f", convertido))[0]
             except (TypeError, ValueError, OverflowError):
                 raise SemanticError(f"'{valor}' no es un valor válido para la columna FLOAT '{columna}'")
-        if tipo == "str" and not isinstance(valor, str):
+        if tipo in CADENAS and not isinstance(valor, str):
             return str(valor)
         return valor
 
@@ -1025,7 +1028,7 @@ class Executor(Visitor):
                 except (TypeError, ValueError):
                     raise SemanticError(f"'{valor}' no es una fecha válida (formato YYYY-MM-DD)")
             tam = definition.get("size")
-            if isinstance(valor, str):
+            if isinstance(valor, str) and tipo != "TEXT":
                 if tam is not None and len(valor) > tam:
                     raise SemanticError(f"el valor de '{columna}' excede VARCHAR({tam})")
                 if isinstance(tabla, StorageTable) and len(valor.encode()) > tabla._string_size(columna):
@@ -1120,6 +1123,8 @@ class Executor(Visitor):
             raise SemanticError("el tamaño de VARCHAR debe ser positivo")
         if node.index_column is not None and tipos[node.index_column] == "POINT":
             raise SemanticError("POINT no admite PRIMARY KEY con índices HASH o BPLUS")
+        if node.index_column is not None and tipos[node.index_column] == "TEXT":
+            raise SemanticError("TEXT no admite PRIMARY KEY con índices HASH o BPLUS")
         columnas_vector = [c.name for c in node.columns if c.type == "VECTOR"]
         if columnas_vector:
             if self.data_dir is None:
@@ -1152,17 +1157,19 @@ class Executor(Visitor):
                 schema.append((c.name, "float"))
             elif c.type == "POINT":
                 schema.append((c.name, "point"))
+            elif c.type == "TEXT":
+                schema.append((c.name, "text"))
             else:
                 schema.append((c.name, "str"))
         campo = node.index_column
         if campo is None:
-            campo = next((c.name for c in escalares if c.type != "POINT"), None)
+            campo = next((c.name for c in escalares if c.type not in ("POINT", "TEXT")), None)
         if campo is None:
             raise SemanticError("la tabla necesita una columna escalar para su índice HASH o BPLUS")
         tipo = node.index_kind
         if tipo is None:
             tipo = "HASH"
-        formato = "".join("i" if c.type == "INT" else "f" if c.type == "FLOAT" else "dd" if c.type == "POINT" else str(c.size * 4 if c.size is not None else 32) + "s" for c in escalares)
+        formato = "".join("i" if c.type == "INT" else "f" if c.type == "FLOAT" else "dd" if c.type == "POINT" else "QI" if c.type == "TEXT" else str(c.size * 4 if c.size is not None else 32) + "s" for c in escalares)
         if struct.calcsize(formato + "Qii") > 4080:
             raise SemanticError("el registro es demasiado grande para una página de 4096 bytes")
         tabla = StorageTable(node.table, schema, self.data_dir, campo, tipo, definitions)
@@ -1187,6 +1194,8 @@ class Executor(Visitor):
         columna = self._columna(tabla, node.column)
         if self._tipo_columna(tabla, columna) == "point":
             raise SemanticError(f"la columna POINT '{columna}' ya tiene su R-Tree; CREATE INDEX admite HASH o BPLUS")
+        if self._tipo_columna(tabla, columna) == "text":
+            raise SemanticError(f"la columna TEXT '{columna}' no admite índices HASH o BPLUS")
         tipo = node.kind or "BPLUS"
         existentes = nombres_de_indices(self.catalog)
         if node.name in existentes:
