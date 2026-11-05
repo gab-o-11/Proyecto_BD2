@@ -91,20 +91,13 @@ class IndiceHNSW:
         cruzadas = distancias_entre(self.almacen.matriz()[identificadores], self.metrica)
         descartado = np.zeros(len(identificadores), dtype=bool)
         elegidos = []
-        posiciones = []
         for posicion in range(len(identificadores)):
             if descartado[posicion]:
                 continue
             elegidos.append(identificadores[posicion])
-            posiciones.append(posicion)
-            if len(elegidos) == m:
-                return elegidos
-            descartado |= cruzadas[posicion] <= valores
-        descartado[posiciones] = False
-        for posicion in np.flatnonzero(descartado).tolist():
             if len(elegidos) == m:
                 break
-            elegidos.append(identificadores[posicion])
+            descartado |= cruzadas[posicion] <= valores
         return elegidos
 
     def _recortar(self, identificador, capa):

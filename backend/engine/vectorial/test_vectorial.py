@@ -286,8 +286,25 @@ def _distancias_entre():
             assert np.allclose(cruzadas[fila], distancias(matriz[fila], matriz, metrica), atol=1e-3), (metrica, fila)
 
 
+def _seleccion_hnsw():
+    with tempfile.TemporaryDirectory(prefix="test_vectorial_") as carpeta:
+        almacen = AlmacenVectores(os.path.join(carpeta, "v"), 2)
+        puntos = [[1.0, 0.0], [1.1, 0.0], [1.2, 0.0], [0.0, 2.0], [0.0, 2.1]]
+        for posicion, punto in enumerate(puntos):
+            almacen.agregar(punto, (1, posicion))
+        indice = IndiceHNSW(almacen, EUCLIDEAN, m=4)
+        candidatos = []
+        for posicion, punto in enumerate(puntos):
+            candidatos.append((distancia([0.0, 0.0], punto, EUCLIDEAN), posicion))
+        assert indice._seleccionar(candidatos, 4) == [0, 3]
+        assert indice._seleccionar(candidatos, 1) == [0]
+        assert indice._seleccionar(candidatos[:3], 3) == [0, 1, 2]
+        almacen.cerrar()
+
+
 def main():
     _distancias_entre()
+    _seleccion_hnsw()
     _metricas()
     _exacta()
     _almacen()
