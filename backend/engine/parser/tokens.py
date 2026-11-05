@@ -57,6 +57,7 @@ class TokenType(Enum):
     INT_TYPE = auto()
     VARCHAR_TYPE = auto()
     DATE_TYPE = auto()
+    TEXT_TYPE = auto()
 
     ## ID y tipos de datos
 
@@ -119,6 +120,7 @@ KEYWORDS = {
     "INT": TokenType.INT_TYPE,
     "VARCHAR": TokenType.VARCHAR_TYPE,
     "DATE": TokenType.DATE_TYPE,
+    "TEXT": TokenType.TEXT_TYPE,
     "UPDATE": TokenType.UPDATE,
     "PRIMARY": TokenType.PRIMARY,
     "KEY": TokenType.KEY,

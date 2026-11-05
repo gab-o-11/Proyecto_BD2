@@ -512,6 +512,8 @@ class Parser:
             tipo = "VARCHAR"
         elif self._match(TokenType.DATE_TYPE):
             tipo, tam = "DATE", None
+        elif self._match(TokenType.TEXT_TYPE):
+            tipo, tam = "TEXT", None
         elif self._match(TokenType.POINT):
             tipo, tam = "POINT", None
         elif self._match(TokenType.VECTOR):
@@ -524,7 +526,7 @@ class Parser:
             tipo = "VECTOR"
         else:
             raise ParseError(
-                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR, DATE, POINT o VECTOR), "
+                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR, DATE, TEXT, POINT o VECTOR), "
                 f"se encontró {self._encontrado()}"
             )
         primary_key, not_null = self._column_constraints()
