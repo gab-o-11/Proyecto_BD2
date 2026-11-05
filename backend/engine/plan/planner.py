@@ -1,6 +1,7 @@
 from . import costos
 from .costos import Perfil, ajustar_filas
-from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Rango, Resultado, SeqScan, Sort, SpatialIndexScan, VectorIndexScan, VectorSeqScan
+from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Rango, Resultado, SeqScan, Sort, SpatialIndexScan, TextIndexScan, VectorIndexScan, VectorSeqScan
+from ..fulltext.preprocess import terminos as terminos_texto
 from ..vectorial.hnsw import EF_SEARCH
 
 DESIGUALDADES = (">", ">=", "<", "<=")
@@ -153,4 +154,20 @@ def escaneo_vectorial(tabla, almacen, consulta, k, metrica, puntaje, nota=None):
     filas = ajustar_filas(min(k, max(len(almacen), 1)))
     inicio, total = costos.costo_vector_exacto(perfil, len(almacen), almacen.dimension, k)
     nodo = VectorSeqScan(tabla, almacen, consulta, k, metrica, puntaje, nota)
+    return nodo.estimar(inicio, total, filas, perfil.ancho)
+
+
+def indice_texto(tabla, indice, consulta, metodo, k, opciones, puntaje):
+    perfil = Perfil(tabla)
+    estructura = indice.vigente()
+    terminos = sorted(set(terminos_texto(consulta)))
+    postings = 0
+    for termino in terminos:
+        postings += estructura.df(termino)
+    filas = min(postings, estructura.documentos)
+    if k is not None:
+        filas = min(filas, k)
+    filas = ajustar_filas(filas)
+    inicio, total = costos.costo_text_scan(perfil, postings, filas)
+    nodo = TextIndexScan(tabla, indice, consulta, terminos, metodo, k, opciones, puntaje)
     return nodo.estimar(inicio, total, filas, perfil.ancho)

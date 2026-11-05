@@ -4,7 +4,7 @@ import re
 import struct
 import time
 from .visitor import PrintVisitor, Visitor
-from .nodes import DEFAULT_SCORE_COLUMN, And, Between, ColumnRef, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, SimilarTo, VectorLiteral, aggregate_name, condition_columns, contains_similar, expression_columns
+from .nodes import DEFAULT_SCORE_COLUMN, DEFAULT_TEXT_SCORE_COLUMN, And, Between, ColumnRef, Compare, Distance, IsNull, Like, Match, Not, Or, Point, Intersection, SimilarTo, VectorLiteral, aggregate_name, condition_columns, contains_match, contains_similar, expression_columns
 from ..catalog import StorageTable, nombres_de_indices
 from ..transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from ..plan import Predicado, Rango, base_de, planner, reporte
@@ -14,6 +14,8 @@ from ..plan.nodos import COMPARADORES, Calificar, IndexScan, SpatialIndexScan
 from ..spatial import distance, point
 from ..spatial_table import SpatialTable
 from ..vectorial.metricas import COSINE
+from ..fulltext import ranking as ranking_texto
+from ..text_table import FULLTEXT
 from ..rtree import contains_point, validate_polygon
 from dataclasses import replace
 import numpy as np
@@ -252,8 +254,14 @@ class Executor(Visitor):
 
     def _plan_select(self, node):
         similar = self._similar_de(node.where)
+        coincidencia = self._match_de(node.where)
         puntaje = None
-        if similar is None:
+        if similar is not None and coincidencia is not None:
+            raise SemanticError("MATCH y SIMILAR_TO no se combinan en una misma consulta")
+        if coincidencia is not None:
+            puntaje = node.score_column or DEFAULT_TEXT_SCORE_COLUMN
+            raiz, tabla = self._fuente_texto(node, coincidencia, puntaje)
+        elif similar is None:
             raiz, tabla = self._fuente_select(node)
         else:
             puntaje = node.score_column or DEFAULT_SCORE_COLUMN
@@ -310,12 +318,62 @@ class Executor(Visitor):
                     orden = self._columna(tabla, orden)
                 if orden not in disponibles:
                     raise SemanticError(f"la columna '{node.order_by}' no está disponible para ORDER BY")
-                raiz = planner.ordenar(raiz, orden, MEM_BUDGET, node.order_desc)
+                if not (coincidencia is not None and orden == puntaje and node.order_desc):
+                    raiz = planner.ordenar(raiz, orden, MEM_BUDGET, node.order_desc)
 
         if node.limit is not None:
             raiz = planner.limitar(raiz, node.limit)
 
         return raiz, columnas, tabla
+
+    @staticmethod
+    def _match_de(where):
+        if not contains_match(where):
+            return None
+        if isinstance(where, Match):
+            return where
+        if not isinstance(where, And):
+            raise SemanticError("MATCH solo se combina con otras condiciones mediante AND")
+        encontrados = []
+        for parte in where.conditions:
+            if isinstance(parte, Match):
+                encontrados.append(parte)
+            elif contains_match(parte):
+                raise SemanticError("MATCH solo se combina con otras condiciones mediante AND")
+        if len(encontrados) > 1:
+            raise SemanticError("una consulta admite un solo MATCH")
+        return encontrados[0]
+
+    def _fuente_texto(self, node, coincidencia, puntaje):
+        tabla = self._tabla(node.table)
+        self._bloquear_tabla(tabla, LockMode.PS)
+        if node.joins or node.table_alias is not None:
+            raise SemanticError("MATCH no admite JOIN ni alias de tabla")
+        columna = self._columna(tabla, self._sin_tabla(tabla, coincidencia.column))
+        if self._tipo_columna(tabla, columna) != "text":
+            raise SemanticError(f"MATCH requiere una columna TEXT y '{columna}' no lo es")
+        indice = tabla.indice_texto_de(columna) if hasattr(tabla, "indice_texto_de") else None
+        if indice is None:
+            raise SemanticError(f"'{columna}' no tiene índice FULLTEXT; créalo con CREATE INDEX ... ON {tabla.name} ({columna}) USING FULLTEXT")
+        if puntaje in tabla.columns:
+            raise SemanticError(f"el alias '{puntaje}' coincide con una columna de '{tabla.name}'")
+        resto = []
+        if isinstance(node.where, And):
+            for parte in node.where.conditions:
+                if parte is not coincidencia:
+                    resto.append(parte)
+        opciones = {}
+        for nombre, valor in node.search_options:
+            opciones[nombre.lower()] = valor
+        k = None
+        sin_reordenar = node.order_by is None or (node.order_by == puntaje and node.order_desc)
+        if not resto and sin_reordenar and node.group_by is None and node.aggregates is None:
+            k = node.limit
+        raiz = planner.indice_texto(tabla, indice, coincidencia.query, node.index_method or ranking_texto.BM25, k, opciones, puntaje)
+        if resto:
+            predicado, seleccion = self._predicado(tabla, resto[0] if len(resto) == 1 else And(tuple(resto)))
+            raiz = planner.filtrar(raiz, predicado, selectividad=seleccion)
+        return raiz, tabla
 
     @staticmethod
     def _similar_de(where):
@@ -613,6 +671,8 @@ class Executor(Visitor):
             return planner.acceso(tabla, None)
         if contains_similar(where):
             raise SemanticError("SIMILAR_TO solo se admite en SELECT")
+        if contains_match(where):
+            raise SemanticError("MATCH solo se admite en SELECT")
         if self._es_espacial(where):
             return self._acceso_espacial(tabla, where)
         if self._es_simple(where):
@@ -1189,13 +1249,15 @@ class Executor(Visitor):
         tabla = self._tabla(node.table)
         if not isinstance(tabla, StorageTable):
             raise SemanticError("los índices secundarios solo existen en tablas guardadas en disco")
+        if node.kind == FULLTEXT:
+            return self._crear_indice_texto(tabla, node)
         if node.kind in ("IVF", "HNSW") or node.column in tabla.almacenes:
             return self._crear_indice_vectorial(tabla, node)
         columna = self._columna(tabla, node.column)
         if self._tipo_columna(tabla, columna) == "point":
             raise SemanticError(f"la columna POINT '{columna}' ya tiene su R-Tree; CREATE INDEX admite HASH o BPLUS")
         if self._tipo_columna(tabla, columna) == "text":
-            raise SemanticError(f"la columna TEXT '{columna}' no admite índices HASH o BPLUS")
+            raise SemanticError(f"la columna TEXT '{columna}' no admite índices HASH o BPLUS; usa USING FULLTEXT")
         tipo = node.kind or "BPLUS"
         existentes = nombres_de_indices(self.catalog)
         if node.name in existentes:
@@ -1214,6 +1276,19 @@ class Executor(Visitor):
         descripcion = "B+ no agrupado" if tipo == "BPLUS" else "hash extensible"
         self.plan.append(self._paso("Create Index", tipo + "(" + columna + ")", node.name, filas))
         return {"message": f"índice '{indice.nombre}' creado sobre {tabla.name}.{columna} ({descripcion}, {filas} entradas)"}
+
+    def _crear_indice_texto(self, tabla, node):
+        existentes = nombres_de_indices(self.catalog)
+        if node.name in existentes:
+            raise SemanticError(f"ya existe un índice llamado '{node.name}' (en '{existentes[node.name]}')")
+        columna = self._columna(tabla, node.column)
+        try:
+            indice = tabla.crear_indice_texto(node.name, columna)
+        except ValueError as error:
+            raise SemanticError(str(error)) from error
+        meta = indice.estructura.meta
+        self.plan.append(self._paso("Create Index", "FULLTEXT(" + columna + ")", node.name, meta["documentos"]))
+        return {"message": f"índice '{node.name}' creado sobre {tabla.name}.{columna} (FULLTEXT con SPIMI: {meta['documentos']} documentos, {meta['terminos']} términos, {meta['bloques']} bloque(s))"}
 
     def _crear_indice_vectorial(self, tabla, node):
         if node.column not in tabla.almacenes:
@@ -1256,6 +1331,10 @@ class Executor(Visitor):
             raise SemanticError(f"el índice '{node.name}' no existe")
         self._bloquear_catalogo(existentes[node.name])
         tabla = self._tabla(existentes[node.name])
+        if node.name in tabla.indices_texto:
+            tabla.eliminar_indice_texto(node.name)
+            self.plan.append(self._paso("Drop Index", tabla.name, node.name, 0))
+            return {"message": f"índice '{node.name}' eliminado de '{tabla.name}'"}
         if node.name in tabla.indices_vectoriales:
             tabla.eliminar_indice_vectorial(node.name)
             self.plan.append(self._paso("Drop Index", tabla.name, node.name, 0))
