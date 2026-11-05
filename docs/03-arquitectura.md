@@ -41,6 +41,22 @@ flowchart TB
 | Algoritmos externos | `backend/engine/external/`, `hashing/external_hash.py` | Ordenamiento, agrupación y JOIN que no caben en memoria |
 | Transacciones | `backend/engine/transactions/` | Transacciones por hilo y gestor de bloqueos |
 
+## Pipeline multimedia
+
+El ensamblaje de los vocabularios y extractores esta en
+`backend/engine/multimedia/pipeline.py`. La API crea `FeaturePipeline` al arrancar,
+carga los modelos de `data/modelos` una vez y registra las modalidades disponibles.
+La extraccion y TF-IDF reutilizan `extract_features.py`, y la cuantizacion reutiliza
+`histograma.py`; no se duplica el entrenamiento dentro del servidor.
+
+`POST /api/tables/{nombre}/features` prepara los vectores y TF-IDF de cada tabla.
+En una consulta `SIMILAR_TO`, el ejecutor utiliza el mismo pipeline para producir
+el vector de consulta y buscarlo en el indice. Las rutas se resuelven dentro de
+`BD2_MULTIMEDIA_DIR` (por defecto `data/datasets`). Los vocabularios se buscan en
+`BD2_MODELS_DIR` (por defecto `data/modelos`).
+
+La configuracion y los ejemplos completos estan en [Pipeline multimedia](13-multimedia.md).
+
 ## Recorrido de una consulta
 
 ```mermaid
