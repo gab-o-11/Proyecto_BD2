@@ -7,6 +7,7 @@ import numpy as np
 from .exacta import knn_exacto, recall_at_k
 from .almacen import AlmacenVectores
 from .ivf import IndiceIVF, lists_por_defecto
+from .hnsw import IndiceHNSW
 from .metricas import COSINE, DOT, EUCLIDEAN, distancia, distancias, score, validar_metrica
 
 
@@ -167,13 +168,96 @@ def _ivf_mantenimiento():
         assert os.path.exists(ruta) and not os.path.exists(ruta + ".tmp")
 
 
+def _recall(indice, consultas, exactos, **opciones):
+    total = 0.0
+    for consulta, exacto in zip(consultas, exactos):
+        aproximado = indice.buscar(consulta, 10, **opciones)
+        ids_exactos = []
+        for _, identificador in exacto:
+            ids_exactos.append(identificador)
+        ids_aproximados = []
+        for _, identificador in aproximado:
+            ids_aproximados.append(identificador)
+        total += recall_at_k(ids_exactos, ids_aproximados)
+    return total / len(exactos)
+
+
+def _hnsw():
+    datos = _vectores(1500, 16)
+    consultas = _vectores(30, 16, semilla=9)
+    with tempfile.TemporaryDirectory(prefix="test_vectorial_") as carpeta:
+        for metrica, minimo in ((EUCLIDEAN, 0.95), (COSINE, 0.95), (DOT, 0.85)):
+            almacen = _cargar_almacen(carpeta, datos, "hnsw_" + metrica)
+            indice = IndiceHNSW(almacen, metrica)
+            indice.construir()
+            exactos = []
+            for consulta in consultas:
+                exactos.append(knn_exacto(consulta, datos, 10, metrica))
+            alto = _recall(indice, consultas, exactos, ef_search=200)
+            assert alto >= minimo, (metrica, alto)
+            assert alto >= _recall(indice, consultas, exactos, ef_search=10) - 0.01
+            assert len(indice.buscar(consultas[0], 10, ef_search=1)) == 10
+            indice.insertar(0)
+            assert indice.indice.ntotal == 1500
+        vacio = AlmacenVectores(os.path.join(carpeta, "vacio_hnsw"), 16)
+        sin_datos = IndiceHNSW(vacio, COSINE)
+        sin_datos.construir()
+        assert sin_datos.buscar(consultas[0], 3) == []
+        _falla(lambda: sin_datos.buscar(consultas[0], 0), "k no positivo")
+        _falla(lambda: sin_datos.buscar(consultas[0], 3, ef_search=0), "ef_search no positivo")
+        _falla(lambda: IndiceHNSW(vacio, COSINE, m=1), "m menor que 2")
+        _falla(lambda: IndiceHNSW(vacio, COSINE, ef_construccion=0), "ef_construccion no positivo")
+
+
+def _hnsw_mantenimiento():
+    datos = _vectores(600, 8)
+    with tempfile.TemporaryDirectory(prefix="test_vectorial_") as carpeta:
+        almacen = _cargar_almacen(carpeta, datos, "hnsw_m")
+        indice = IndiceHNSW(almacen, COSINE)
+        indice.construir()
+        assert 3 in {i for _, i in indice.buscar(datos[3], 5, ef_search=100)}
+        almacen.borrar(almacen.rid(3))
+        indice.borrar(3)
+        assert 3 not in {i for _, i in indice.buscar(datos[3], 5, ef_search=100)}
+        assert len(indice.buscar(datos[3], 5, ef_search=100)) == 5
+        nuevo = almacen.agregar(datos[3] * 3, (2, 0))
+        indice.insertar(nuevo)
+        assert nuevo == indice.buscar(datos[3], 1, ef_search=100)[0][1]
+        ruta = os.path.join(carpeta, "indice.hnsw")
+        indice.guardar(ruta)
+        assert not os.path.exists(ruta + ".tmp")
+        antes = indice.buscar(datos[7], 10, ef_search=50)
+        posterior = almacen.agregar(datos[8] * 2, (2, 1))
+        reabierto = IndiceHNSW.abrir(almacen, ruta)
+        assert reabierto.metrica == COSINE and reabierto.m == 16 and reabierto.ef_construccion == 64
+        assert posterior in reabierto.indexados and reabierto.indice.ntotal == indice.indice.ntotal + 1
+        ids_antes = set()
+        for _, identificador in antes:
+            ids_antes.add(identificador)
+        ids_despues = set()
+        for _, identificador in reabierto.buscar(datos[7], 10, ef_search=50):
+            ids_despues.add(identificador)
+        assert ids_despues == ids_antes
+        assert 3 not in {i for _, i in reabierto.buscar(datos[3], 5, ef_search=100)}
+        for identificador in almacen.ids_vivos().tolist():
+            almacen.borrar(almacen.rid(identificador))
+        assert reabierto.buscar(datos[0], 5) == []
+        sin_datos = IndiceHNSW(AlmacenVectores(os.path.join(carpeta, "vacio_m"), 8), EUCLIDEAN)
+        sin_datos.construir()
+        ruta_vacia = os.path.join(carpeta, "vacio.hnsw")
+        sin_datos.guardar(ruta_vacia)
+        assert IndiceHNSW.abrir(sin_datos.almacen, ruta_vacia).indice.ntotal == 0
+
+
 def main():
     _metricas()
     _exacta()
     _almacen()
     _ivf()
     _ivf_mantenimiento()
-    print("OK: métricas, búsqueda exacta, almacén de vectores e IVF")
+    _hnsw()
+    _hnsw_mantenimiento()
+    print("OK: métricas, búsqueda exacta, almacén de vectores, IVF y HNSW")
 
 
 if __name__ == "__main__":
