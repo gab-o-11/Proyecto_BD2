@@ -58,7 +58,7 @@ class IndiceSecundario:
 
 
 class StorageTable(SpatialTable, VectorTable):
-    def __init__(self, name, schema, data_dir, index_field, index_kind, column_definitions=None, secundarios=None, nulos=True):
+    def __init__(self, name, schema, data_dir, index_field, index_kind, column_definitions=None, secundarios=None, nulos=True, indices_vectoriales=None):
         self.name = name
         self._init_spatial()
         self.schema = schema
@@ -112,9 +112,9 @@ class StorageTable(SpatialTable, VectorTable):
         for definicion in secundarios or []:
             indice = IndiceSecundario(self, definicion["name"], definicion["column"], definicion["kind"])
             self.secundarios[indice.nombre] = indice
+        self._init_vectorial(indices_vectoriales)
         self._write_descriptor()
         self._abrir_indices_espaciales([col for col, col_type in schema if col_type == "point"])
-        self._init_vectorial()
 
     def _leer_estadisticas(self):
         if not os.path.exists(self.stats_path):
@@ -209,6 +209,7 @@ class StorageTable(SpatialTable, VectorTable):
             "index_kind": self.index_kind,
             "column_definitions": self.column_definitions,
             "secondary_indexes": [indice.describir() for indice in self.secundarios.values()],
+            "vector_indexes": [indice.describir() for indice in self.indices_vectoriales.values()],
             "nulls": self.nulos,
         }
         path = os.path.join(self.data_dir, self.name + TABLE_SUFFIX)
@@ -677,6 +678,7 @@ def _load_tables(data_dir):
             descriptor.get("column_definitions"),
             descriptor.get("secondary_indexes"),
             descriptor.get("nulls", False),
+            descriptor.get("vector_indexes"),
         )
         catalogo[descriptor["name"]] = tabla
     for tabla in catalogo.values():
@@ -737,6 +739,7 @@ def table_info(tabla):
     indexes = [{"field": tabla.index_field, "type": kind, "name": tabla.nombre_indice_principal(), "primary": True}]
     indexes.extend({"field": col, "type": "RTREE", "name": tabla.name + "_" + col + "_rtree", "primary": False} for col, typ in tabla.schema if typ == "point")
     indexes.extend({"field": i.columna, "type": i.tipo, "name": i.nombre, "primary": False} for i in tabla.secundarios.values())
+    indexes.extend({"field": i.columna, "type": i.tipo, "name": i.nombre, "primary": False} for i in tabla.indices_vectoriales.values())
     storage = "sequential"
     if not tabla.is_clustered:
         storage = "heap"
@@ -763,6 +766,7 @@ def table_indexes(tabla):
     indexes = [{"name": tabla.nombre_indice_principal()}]
     indexes.extend({"name": tabla.name + "_" + col + "_rtree"} for col, typ in tabla.schema if typ == "point")
     indexes.extend({"name": nombre} for nombre in tabla.secundarios)
+    indexes.extend({"name": nombre} for nombre in tabla.indices_vectoriales)
     return indexes
 
 

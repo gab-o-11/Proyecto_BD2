@@ -13,6 +13,7 @@ from ..plan.costos import Perfil
 from ..plan.nodos import COMPARADORES, Calificar, IndexScan, SpatialIndexScan
 from ..spatial import distance, point
 from ..spatial_table import SpatialTable
+from ..vectorial.metricas import COSINE
 from ..rtree import contains_point, validate_polygon
 from dataclasses import replace
 import numpy as np
@@ -1072,6 +1073,8 @@ class Executor(Visitor):
         tabla = self._tabla(node.table)
         if not isinstance(tabla, StorageTable):
             raise SemanticError("los índices secundarios solo existen en tablas guardadas en disco")
+        if node.kind in ("IVF", "HNSW") or node.column in tabla.almacenes:
+            return self._crear_indice_vectorial(tabla, node)
         columna = self._columna(tabla, node.column)
         if self._tipo_columna(tabla, columna) == "point":
             raise SemanticError(f"la columna POINT '{columna}' ya tiene su R-Tree; CREATE INDEX admite HASH o BPLUS")
@@ -1094,6 +1097,27 @@ class Executor(Visitor):
         self.plan.append(self._paso("Create Index", tipo + "(" + columna + ")", node.name, filas))
         return {"message": f"índice '{indice.nombre}' creado sobre {tabla.name}.{columna} ({descripcion}, {filas} entradas)"}
 
+    def _crear_indice_vectorial(self, tabla, node):
+        if node.column not in tabla.almacenes:
+            raise SemanticError(f"'{node.column}' no es una columna VECTOR de '{tabla.name}'; IVF y HNSW solo indexan columnas VECTOR")
+        if node.kind not in ("IVF", "HNSW"):
+            raise SemanticError(f"la columna VECTOR '{node.column}' solo admite índices IVF o HNSW")
+        existentes = nombres_de_indices(self.catalog)
+        if node.name in existentes:
+            raise SemanticError(f"ya existe un índice llamado '{node.name}' (en '{existentes[node.name]}')")
+        opciones = dict(node.options)
+        metrica = opciones.get("METRIC", COSINE)
+        for indice in tabla.indices_vectoriales.values():
+            if indice.columna == node.column and indice.tipo == node.kind and indice.metrica == metrica:
+                raise SemanticError(f"'{node.column}' ya tiene el índice {node.kind} '{indice.nombre}' con métrica {metrica}")
+        try:
+            indice = tabla.crear_indice_vectorial(node.name, node.column, node.kind, opciones)
+        except ValueError as error:
+            raise SemanticError(str(error)) from error
+        filas = len(indice.almacen)
+        self.plan.append(self._paso("Create Index", node.kind + "(" + node.column + ")", node.name, filas))
+        return {"message": f"índice '{node.name}' creado sobre {tabla.name}.{node.column} ({node.kind}, {metrica}, {filas} entradas)"}
+
     def visit_DropTable(self, node):
         self._bloquear_catalogo(node.table)
         if node.table not in self.catalog:
@@ -1114,6 +1138,10 @@ class Executor(Visitor):
             raise SemanticError(f"el índice '{node.name}' no existe")
         self._bloquear_catalogo(existentes[node.name])
         tabla = self._tabla(existentes[node.name])
+        if node.name in tabla.indices_vectoriales:
+            tabla.eliminar_indice_vectorial(node.name)
+            self.plan.append(self._paso("Drop Index", tabla.name, node.name, 0))
+            return {"message": f"índice '{node.name}' eliminado de '{tabla.name}'"}
         if node.name not in tabla.secundarios:
             raise SemanticError(f"'{node.name}' es un índice propio de la tabla '{tabla.name}' y no se puede eliminar; solo se eliminan índices creados con CREATE INDEX")
         tabla.eliminar_indice(node.name)
