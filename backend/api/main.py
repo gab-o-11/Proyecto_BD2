@@ -10,7 +10,7 @@ from engine.parser.scanner import Scanner
 from engine.parser.sql_parser import Parser
 from engine.parser.executor import Executor
 from engine.transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
-from engine.catalog import StorageTable
+from engine.catalog import STRLEN, StorageTable
 from engine.importer import CSVImportError, parse_csv
 from engine.multimedia.extract_features import ColeccionesMultimedia
 
@@ -242,6 +242,8 @@ async def import_table(
             raise CSVImportError(f"la columna índice '{index_field}' no existe")
         if dict(schema)[index_field] == "point":
             raise CSVImportError("la columna índice no puede ser POINT; el R-Tree se crea solo para cada columna POINT")
+        if dict(schema)[index_field] == "text":
+            raise CSVImportError(f"la columna índice no puede ser TEXT ('{index_field}' tiene textos de más de {STRLEN} bytes); elige otra columna como índice")
         vacia = next((numero for numero, row in enumerate(rows, start=2) if row[index_field] is None), None)
         if vacia is not None:
             raise CSVImportError(f"fila {vacia}: la columna índice '{index_field}' no puede estar vacía")

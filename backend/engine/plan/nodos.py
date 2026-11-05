@@ -8,6 +8,7 @@ from itertools import islice
 from ..common import io_stats
 from ..external import external_sort
 from ..hashing import external_group_by, grace_hash_join
+from ..fulltext import ranking as ranking_texto
 from ..vectorial.exacta import knn_exacto
 from ..vectorial.metricas import score
 
@@ -429,6 +430,50 @@ class VectorSeqScan(Nodo):
 
     def paso(self):
         return {"op": self.tipo, "method": "exact-" + self.metrica, "detail": self.tabla.name + " k=" + str(self.k)}
+
+
+class TextIndexScan(Nodo):
+    tipo = "Text Index Scan"
+
+    def __init__(self, tabla, indice, consulta, terminos, metodo, k, opciones, puntaje):
+        super().__init__()
+        self.tabla = tabla
+        self.texto = indice
+        self.consulta = consulta
+        self.terminos = terminos
+        self.metodo = metodo
+        self.k = k
+        self.opciones = opciones
+        self.puntaje = puntaje
+
+    def titulo(self):
+        return "Text Index Scan using " + self.texto.nombre + " on " + self.tabla.name
+
+    def relacion(self):
+        return self.tabla.name
+
+    def indice(self):
+        return self.texto.nombre
+
+    def detalles(self):
+        ranking = self.metodo
+        if self.metodo == ranking_texto.BM25:
+            ranking += " (k1=" + str(self.opciones.get("k1", ranking_texto.K1)) + ", b=" + str(self.opciones.get("b", ranking_texto.B)) + ")"
+        top = "all" if self.k is None else str(self.k)
+        return ["Match: " + self.texto.columna + " @@ " + literal(self.consulta),
+                "Terms: " + (" ".join(self.terminos) or "(none)"),
+                "Ranking: " + ranking + " top=" + top]
+
+    def producir(self):
+        estructura = self.texto.vigente()
+        for valor, doc in ranking_texto.buscar(estructura, self.consulta, self.metodo, self.k, **self.opciones):
+            fila = self.tabla.fila_de_rid(estructura.rid(doc))
+            if fila is not None:
+                fila[self.puntaje] = valor
+                yield fila
+
+    def paso(self):
+        return {"op": self.tipo, "method": "SPIMI-" + self.metodo, "detail": self.texto.nombre + " top=" + ("all" if self.k is None else str(self.k))}
 
 
 class Calificar(Nodo):

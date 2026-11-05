@@ -265,3 +265,9 @@ def costo_vector_hnsw(perfil, vectores, dimension, m, ef_search, k):
     inicio += candidatos * math.log2(max(ef_search, 2)) * CPU_OPERATOR_COST
     return inicio, inicio + _costo_filas_vectoriales(perfil, k)
 
+
+def costo_text_scan(perfil, postings, filas):
+    paginas = math.ceil(postings * 8 / PAGE_SIZE)
+    inicio = paginas * SEQ_PAGE_COST + postings * CPU_OPERATOR_COST
+    inicio += postings * math.log2(max(filas, 2)) * CPU_OPERATOR_COST
+    return inicio, inicio + min(filas, perfil.paginas) * RANDOM_PAGE_COST + filas * CPU_TUPLE_COST
