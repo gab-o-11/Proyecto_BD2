@@ -120,6 +120,17 @@ SELECT id FROM tiendas WHERE intersecta(ubicacion,
 
 `mi_ubicacion` es un parámetro que envía la interfaz (el punto elegido en el mapa). Detalles en [Consultas espaciales](08-espacial.md).
 
+## Búsqueda de texto
+
+```sql
+CREATE INDEX idx_contenido ON documentos (contenido) USING FULLTEXT;
+SELECT * FROM documentos WHERE MATCH(contenido, 'base de datos vectorial') USING TF_IDF LIMIT 10;
+SELECT *, SCORE() AS relevancia FROM documentos WHERE MATCH(contenido, 'machine learning')
+  USING BM25 WITH K1=1.2, B=0.75 ORDER BY relevancia DESC;
+```
+
+`MATCH` requiere una columna `TEXT` con índice `FULLTEXT`. Detalles en [Búsqueda de texto](12-texto.md).
+
 ## Planes y estadísticas
 
 ```sql
