@@ -1,3 +1,57 @@
+#!/usr/bin/env python3
+"""Entrena un vocabulario multimedia, sin arrancar el backend (Python 3.10+).
+
+INSTALAR, una vez, en tu entorno virtual:
+    python -m pip install "numpy>=1.24,<2.3"
+    python -m pip install "opencv-python-headless==4.11.0.86"  # imágenes
+    python -m pip install "librosa==0.11.0"                    # audio
+
+EJECUTAR, desde la raíz del proyecto, con el dataset descomprimido:
+    python scripts/entrenar_Kmeans.py --dataset /ruta/imagenes --salida data/modelos/fotos
+    python scripts/entrenar_Kmeans.py --dataset /ruta/audios --tipo audio --salida data/modelos/audio
+    # Repetir el mismo comando con --reanudar después de interrumpirlo.
+    # --iteraciones puede aumentarse al reanudar; las otras opciones se conservan.
+    python scripts/entrenar_Kmeans.py --autoprueba
+
+También acepta --tipo descriptores: un .npy por objeto, matriz (N, D),
+o un solo .npy con todos los descriptores. Requiere --descriptor-id identificador
+de tu extractor/configuración. En el segundo caso aumenta --por-archivo.
+No admite ZIP, tablas de metadatos ni imágenes y audio mezclados en un modelo.
+
+SALIDAS (creadas al ejecutar, no al importar):
+    vocabulary.json: centroides, dimensión, descriptor_id y vocabulary_id.
+    training.json: configuración, inercia, convergencia y ocupación de grupos.
+    run.json, sample.npy, checkpoint.npz, cache/: permiten reanudar.
+    omitidos.jsonl: archivos ilegibles o sin descriptores.
+
+K-Means++ y las iteraciones de Lloyd se implementan aquí con NumPy. No usan
+sklearn ni GPU. Los adaptadores SIFT/MFCC usan bibliotecas para preparar el
+entrenamiento; no implementan los futuros módulos del motor ni histogramas.
+Se entrena sobre una muestra aleatoria limitada, no sobre todo el dataset:
+por defecto hasta 10 000 archivos, 256 descriptores/archivo y 100 000 en total.
+La extracción procesa un archivo a la vez; las distancias se calculan por lotes.
+El audio usa los primeros 30 s por archivo (ajustable). El límite de memoria
+se refiere a descriptores/distancias, no al tamaño de una imagen al decodificarla.
+
+Las imagenes reutilizan SiftExtractor del gestor (512 px, 500 puntos por defecto),
+sin normalizacion L2 adicional.
+Para consultas futuras conserva EXACTAMENTE el extractor, preprocesamiento y
+normalización de training.json. Cambiarlos requiere volver a entrenar. El JSON
+del vocabulario es compatible con Vocabulary/load_vocabulary de la guía.
+No cambies el dataset durante una ejecución. La reanudación comprueba rutas,
+tamaños y fechas de modificación; no calcula un hash del contenido multimedia.
+Ctrl+C conserva la última iteración completa y los archivos ya preparados.
+Se impiden dos escritores sobre la misma salida con flock en Unix o msvcrt en Windows.
+
+Referencias de los adaptadores:
+https://docs.opencv.org/4.x/da/df5/tutorial_py_sift_intro.html
+https://librosa.org/doc/0.11.0/generated/librosa.load.html
+https://librosa.org/doc/0.11.0/generated/librosa.feature.mfcc.html
+https://numpy.org/doc/stable/reference/generated/numpy.load.html
+"""
+
+from __future__ import annotations
+
 import argparse
 from contextlib import contextmanager
 import hashlib
@@ -33,20 +87,20 @@ def digest(data):
 
 
 def atomic_write(path, writer):
+    """Publica un archivo completo; interrumpir la escritura no daña el previo."""
     path = Path(path)
-    with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as file:
-        temporary = Path(file.name)
-        try:
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as file:
+            temporary = Path(file.name)
             writer(file)
             file.flush()
             os.fsync(file.fileno())
-        except BaseException:
-            temporary.unlink(missing_ok=True)
-            raise
-    try:
         os.replace(temporary, path)
     finally:
-        temporary.unlink(missing_ok=True)
+        # En Windows el archivo debe estar cerrado antes de poder eliminarlo.
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def save_json(path, data):
@@ -60,16 +114,31 @@ def save_array(path, array):
 
 @contextmanager
 def output_lock(directory):
-    import fcntl
-    with (directory / ".lock").open("a") as lock:
+    if os.name == "nt":
+        import msvcrt
+    else:
+        import fcntl
+    with (directory / ".lock").open("a+b") as lock:
+        if os.name == "nt":
+            if lock.seek(0, os.SEEK_END) == 0:
+                lock.write(b"\0")
+                lock.flush()
+            lock.seek(0)
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as error:
+            if os.name == "nt":
+                msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
             raise ValueError("otro entrenamiento está usando esta salida") from error
         try:
             yield
         finally:
-            fcntl.flock(lock, fcntl.LOCK_UN)
+            if os.name == "nt":
+                lock.seek(0)
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(lock, fcntl.LOCK_UN)
 
 
 def discover(args):
@@ -98,6 +167,7 @@ def discover(args):
     paths = groups[args.tipo]
     if not paths:
         raise ValueError(f"no hay archivos compatibles con --tipo {args.tipo}")
+    # Muestrear sobre la lista completa evita elegir solo las primeras clases.
     total = len(paths)
     if args.max_archivos and total > args.max_archivos:
         rng = np.random.default_rng(args.semilla)
@@ -114,31 +184,22 @@ def discover(args):
 
 
 def make_extractor(args):
+    """Devuelve una función archivo -> (N,D) y su configuración reproducible."""
     if args.tipo == "imagenes":
-        try:
-            import cv2
-        except ImportError as error:
-            raise ValueError('instala imágenes: python -m pip install "opencv-python-headless==4.11.0.86"') from error
+        # Reutilizar el mismo extractor de las consultas, sin otro contrato.
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+        from engine.multimedia.local_features import SiftExtractor
+        import cv2
         cv2.setNumThreads(1)
-        sift = cv2.SIFT_create(nfeatures=0, nOctaveLayers=3,
-                              contrastThreshold=0.04, edgeThreshold=10, sigma=1.6)
-        config = {"extractor": "sift", "opencv": cv2.__version__,
-                  "grayscale": "opencv-imread", "max_side": args.max_lado,
-                  "resize": "INTER_AREA", "nfeatures": 0, "nOctaveLayers": 3,
-                  "contrastThreshold": 0.04, "edgeThreshold": 10, "sigma": 1.6}
+        if args.normalizacion not in ("auto", "none"):
+            raise ValueError("el extractor del gestor usa descriptores sin normalizacion L2 adicional")
+        extractor = SiftExtractor(max_side=args.max_lado, nfeatures=500)
+        config = {"extractor": "sift", "descriptor_id": extractor.descriptor_id,
+                  "opencv": cv2.__version__, "max_side": args.max_lado,
+                  "nfeatures": 500, "normalization": "none"}
 
         def extract(path):
-            image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-            if image is None:
-                raise ValueError("no se pudo decodificar la imagen")
-            height, width = image.shape
-            ratio = min(1.0, args.max_lado / max(height, width))
-            if ratio < 1:
-                image = cv2.resize(image, (max(1, round(width * ratio)),
-                                          max(1, round(height * ratio))),
-                                   interpolation=cv2.INTER_AREA)
-            _, rows = sift.detectAndCompute(image, None)
-            return np.empty((0, 128), dtype=np.float32) if rows is None else rows
+            return extractor.extract(path).values
 
     elif args.tipo == "audio":
         try:
@@ -174,12 +235,13 @@ def make_extractor(args):
             return np.load(path, mmap_mode="r", allow_pickle=False)
 
     config["normalization"] = (
-        "l2" if args.tipo == "imagenes" else "none"
+        "none"
     ) if args.normalizacion == "auto" else args.normalizacion
     return extract, config
 
 
 def prepare_rows(rows, per_file, seed, normalization):
+    """Muestreo por objeto; nunca acepta listas de IDs como descriptores."""
     if rows.ndim != 2 or rows.shape[1] < 1 or rows.dtype.kind not in "fiu":
         raise ValueError("se esperaba una matriz numérica real (N, D)")
     rng = np.random.default_rng(seed)
@@ -197,6 +259,8 @@ def prepare_rows(rows, per_file, seed, normalization):
 
 
 class DescriptorReservoir:
+    """Muestra uniforme por prioridades sin copiar toda la matriz por archivo."""
+
     def __init__(self, capacity, dimension, seed):
         self.rows = np.empty((capacity, dimension), dtype=np.float64)
         self.priorities = np.empty(capacity)
@@ -267,11 +331,15 @@ def prepare_sample(args, paths, entries, extract, config, output):
                     log(f"Omitido {path.name}: {error}")
                 continue
             if not cached:
+                # Errores de escritura (p. ej., disco lleno) deben detener el
+                # trabajo, no confundirse con un archivo multimedia inválido.
                 save_array(target, rows)
             if reservoir is None:
                 reservoir = DescriptorReservoir(args.max_descriptores, rows.shape[1], args.semilla)
             if rows.shape[1] != reservoir.rows.shape[1]:
                 raise ValueError(f"dimensiones incompatibles en {path}; no mezcles extractores")
+            # Reservorio por prioridades: mantiene una muestra uniforme de los
+            # descriptores que sobrevivieron al límite por objeto, sin crecer con N.
             reservoir.add(rows)
             seen += len(rows)
             good += 1
@@ -291,9 +359,12 @@ def prepare_sample(args, paths, entries, extract, config, output):
 
 
 def assignment(rows, centers, batch_size):
+    """Entrega índices y distancias cuadradas por lote, sin matriz N×K×D."""
     for start in range(0, len(rows), batch_size):
         block = np.asarray(rows[start:start + batch_size], dtype=np.float64)
         distances = np.empty((len(block), len(centers)), dtype=np.float64)
+        # Restar antes de elevar al cuadrado evita cancelación numérica de
+        # ||x||² + ||c||² - 2 x.c para descriptores con offsets grandes.
         for index, center in enumerate(centers):
             delta = block - center
             distances[:, index] = np.einsum("ij,ij->i", delta, delta)
@@ -304,6 +375,7 @@ def assignment(rows, centers, batch_size):
 
 
 def initialize(rows, k, batch_size, seed):
+    """K-Means++: el siguiente centro se elige proporcionalmente a D²."""
     if len(rows) < k:
         raise ValueError("K supera la cantidad de descriptores")
     rng = np.random.default_rng(seed)
@@ -358,6 +430,7 @@ def fit(rows, args, checkpoint):
         new = centers.copy()
         used = counts > 0
         new[used] = sums[used] / counts[used, None]
+        # Los grupos vacíos conservan su centro; se informan al terminar.
         movement = float(np.linalg.norm(new - centers, axis=1).max())
         if not math.isfinite(movement):
             raise ValueError("actualización no finita de centroides")
@@ -385,7 +458,7 @@ def run(args):
     paths, dataset = discover(args)
     extract, config = make_extractor(args)
     config["numpy"] = np.__version__
-    descriptor_id = (args.descriptor_id if args.tipo == "descriptores" and
+    descriptor_id = config.get("descriptor_id") or (args.descriptor_id if args.tipo == "descriptores" and
                      config["normalization"] == "none" else
                      config["extractor"] + ":" + digest(config))
     specification = {
@@ -415,7 +488,10 @@ def run(args):
         log(f"Entrenando: N={n}, D={dimension}, K={args.k}. CPU; sin GPU.")
         log(f"Muestra: {n * dimension * 8 / 2**20:.1f} MiB; matriz de distancias/lote: "
             f"{min(n, args.lote) * args.k * 8 / 2**20:.1f} MiB (más temporales).")
-        centers, stats = fit(sample, args, output / "checkpoint.npz")
+        try:
+            centers, stats = fit(sample, args, output / "checkpoint.npz")
+        finally:
+            sample._mmap.close()
         vocabulary = {"format_version": 1, "descriptor_id": descriptor_id,
                       "dimension": dimension, "centroids": centers.tolist()}
         vocabulary["vocabulary_id"] = digest(vocabulary)
@@ -441,10 +517,10 @@ def parser():
     command.add_argument("--por-archivo", type=int, default=256)
     command.add_argument("--max-archivos", type=int, default=10_000, help="0 = todos; muestra aleatoria")
     command.add_argument("--iteraciones", type=int, default=50)
-    command.add_argument("--lote", type=int, default=1024)
+    command.add_argument("--lote", type=int, default=512)
     command.add_argument("--semilla", type=int, default=42)
     command.add_argument("--tolerancia", type=float, default=1e-4)
-    command.add_argument("--max-lado", type=int, default=1024, help="lado máximo de imagen al extraer SIFT")
+    command.add_argument("--max-lado", type=int, default=512, help="lado máximo de imagen al extraer SIFT")
     command.add_argument("--segundos", type=float, default=30, help="primeros segundos de cada audio")
     command.add_argument("--sr", type=int, default=22050)
     command.add_argument("--mfcc", type=int, default=20)
@@ -474,6 +550,7 @@ def validate(args, command):
 
 
 def self_test():
+    """Prueba de extremo a extremo, todo en un directorio temporal."""
     if np is None:
         raise ValueError("la autoprueba requiere NumPy")
     with tempfile.TemporaryDirectory(prefix="bd2-kmeans-") as directory:
@@ -495,6 +572,7 @@ def self_test():
         assert report["result"]["iterations"] == 2
         payload = {key: value for key, value in first.items() if key != "vocabulary_id"}
         assert digest(payload) == first["vocabulary_id"]
+        # No sobrescribir entrenamientos ni aceptar otra configuración al reanudar.
         for invalid in (argv, argv + ["--reanudar", "--semilla", "9"]):
             try:
                 run(parser().parse_args(invalid))
@@ -515,11 +593,14 @@ def self_test():
             pass
         else:
             raise AssertionError("debió rechazarse NaN")
+        # Distancias correctas aunque las coordenadas compartan un offset grande.
         rows = np.array([[1e10, 1e10], [1e10 + 3, 1e10 + 4]])
         _, _, labels, distances = next(assignment(rows, rows[:1], 2))
         assert labels.tolist() == [0, 0] and distances.tolist() == [0., 25.]
         normalized = prepare_rows(np.array([[0., 0.], [3., 4.]]), 10, 42, "l2")
         assert np.allclose(normalized, [[0.6, 0.8]])
+        # El muestreo por lotes coincide con tomar las menores prioridades
+        # de todos los datos; nunca excede el límite de memoria configurado.
         population = np.arange(100, dtype=np.float64).reshape(-1, 1)
         reservoir = DescriptorReservoir(7, 1, 42)
         for offset in range(0, 100, 11):
@@ -527,6 +608,8 @@ def self_test():
         expected = np.argsort(np.random.default_rng(42).random(100))[:7]
         assert set(reservoir.values[:, 0]) == set(expected)
         assert reservoir.values.shape == (7, 1)
+        # Una interrupción en extracción permite reutilizar los archivos ya
+        # cacheados; la muestra reconstruida debe ser idéntica a la continua.
         resume_args = parser().parse_args(argv)
         paths, dataset_info = discover(resume_args)
         extractor, config = make_extractor(resume_args)
@@ -557,7 +640,12 @@ def self_test():
 
         resumed = prepare_sample(resume_args, paths, dataset_info["files"], record_call, config, interrupted)
         continuous = prepare_sample(resume_args, paths, dataset_info["files"], extractor, config, uninterrupted)
-        assert len(calls) == 1 and np.array_equal(resumed, continuous)
+        try:
+            assert len(calls) == 1 and np.array_equal(resumed, continuous)
+        finally:
+            resumed._mmap.close()
+            continuous._mmap.close()
+        # Atomicidad: un fallo de escritura conserva el archivo anterior.
         atomic = root / "atomic.json"
         save_json(atomic, {"value": "original"})
 

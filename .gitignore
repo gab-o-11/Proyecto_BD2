@@ -12,3 +12,5 @@ data/*
 *.dir
 backend/.venv
 !data/generar_demo.py
+
+/.venv-entrenamiento/
