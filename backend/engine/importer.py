@@ -3,6 +3,7 @@ import io
 import math
 import re
 
+from .catalog import STRLEN
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 NUMERO = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
@@ -30,7 +31,11 @@ def _infer_type(values):
             float(value)
         return "float"
     except ValueError:
-        return "str"
+        pass
+    for value in values:
+        if len(value.encode("utf-8")) > STRLEN:
+            return "text"
+    return "str"
 
 
 def _convert(value, col_type, row_number, column):
@@ -53,8 +58,8 @@ def _convert(value, col_type, row_number, column):
             return converted
         if col_type == "float":
             return float(value)
-        if len(value.encode("utf-8")) > 32:
-            raise CSVImportError(f"fila {row_number}, columna '{column}': texto mayor a 32 bytes")
+        if col_type == "str" and len(value.encode("utf-8")) > STRLEN:
+            raise CSVImportError(f"fila {row_number}, columna '{column}': texto mayor a {STRLEN} bytes")
         return value
     except ValueError as error:
         raise CSVImportError(

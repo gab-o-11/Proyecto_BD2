@@ -70,3 +70,22 @@ sin otras cargas mejora la estabilidad de los tiempos.
 
 Las capturas de `documents/visual_spatial/` son evidencia funcional sobre tres
 puntos de prueba; no son mediciones sobre los datasets del benchmark.
+
+## Parte 3: búsqueda de texto
+
+[parte3.ipynb](parte3.ipynb) compara TF-IDF + coseno y BM25 (índice SPIMI del motor)
+con PostgreSQL GIN sobre 1 000, 10 000 y 100 000 documentos y consultas de 1, 3 y
+5–7 palabras. Mide construcción, tiempo de consulta, Precision@10, Recall@10, memoria
+y disco. El corpus y sus juicios de relevancia salen de
+[`data/generate_text.py`](../data/generate_text.py): un documento es relevante si es
+del mismo tema que la consulta. Los resultados quedan en `text_results/`.
+
+Requiere PostgreSQL (`initdb`, `pg_ctl`, `pg_buffercache`) y `psycopg2`. Al igual que
+`spatial.py`, crea un clúster privado temporal en `/tmp` con socket Unix y sin TCP.
+
+```sh
+rtk proxy micromamba run -n bd2 python -m jupyter nbconvert \
+  --to notebook --execute --inplace benchmarks/parte3.ipynb \
+  --ExecutePreprocessor.kernel_name=bd2 \
+  --ExecutePreprocessor.timeout=3600
+```

@@ -136,6 +136,7 @@ flowchart LR
 | 🖥️ | [Interfaz](docs/09-interfaz.md) | Recorrido por los paneles de la aplicación |
 | ✅ | [Pruebas](docs/10-pruebas.md) | Cómo ejecutar las pruebas y qué cubren |
 | ⚠️ | [Alcance y limitaciones](docs/11-limitaciones.md) | Lo que el sistema no hace |
+| 🔎 | [Búsqueda de texto](docs/12-texto.md) | `TEXT`, índice `FULLTEXT` con SPIMI, `MATCH`, TF-IDF y BM25 |
 | 📊 | [Benchmarks](benchmarks/README.md) | Comparación experimental de técnicas y resultados |
 
 ## Estructura del repositorio
