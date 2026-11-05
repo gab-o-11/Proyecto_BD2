@@ -7,6 +7,7 @@ dist/
 data/*
 !data/.gitkeep
 !data/generate_data.py
+!data/generate_text.py
 *.dat
 *.buk
 *.dir

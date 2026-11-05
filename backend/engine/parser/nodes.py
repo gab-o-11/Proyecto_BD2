@@ -44,16 +44,33 @@ class SimilarTo(Node):
     k: int
 
 
-def contains_similar(condition):
-    if isinstance(condition, SimilarTo):
+DEFAULT_TEXT_SCORE_COLUMN = "score"
+
+
+@dataclass(frozen=True)
+class Match(Node):
+    column: str
+    query: str
+
+
+def _contiene(condition, tipo):
+    if isinstance(condition, tipo):
         return True
     if isinstance(condition, (And, Or)):
         for parte in condition.conditions:
-            if contains_similar(parte):
+            if _contiene(parte, tipo):
                 return True
     if isinstance(condition, Not):
-        return contains_similar(condition.condition)
+        return _contiene(condition.condition, tipo)
     return False
+
+
+def contains_similar(condition):
+    return _contiene(condition, SimilarTo)
+
+
+def contains_match(condition):
+    return _contiene(condition, Match)
 
 
 def expression_columns(expression):
@@ -127,6 +144,8 @@ def condition_columns(condition):
         return [condition.column]
     if isinstance(condition, SimilarTo):
         return []
+    if isinstance(condition, Match):
+        return [condition.column]
     columnas = expression_columns(condition.column)
     if isinstance(getattr(condition, "value", None), ColumnRef):
         columnas.append(condition.value.name)

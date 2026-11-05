@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from .nodes import DEFAULT_SCORE_COLUMN, And, ColumnRef, Distance, Or, Point, VectorLiteral, aggregate_name
+from .nodes import DEFAULT_SCORE_COLUMN, DEFAULT_TEXT_SCORE_COLUMN, And, ColumnRef, Distance, Or, Point, VectorLiteral, aggregate_name, contains_match
 
 
 class Visitor(ABC):
@@ -41,8 +41,10 @@ class PrintVisitor(Visitor):
 
         puntaje = None
         if node.score_column is not None:
-            puntaje = "SIMILARITY_SCORE()"
-            if node.score_column != DEFAULT_SCORE_COLUMN:
+            puntaje, defecto = "SIMILARITY_SCORE()", DEFAULT_SCORE_COLUMN
+            if contains_match(node.where):
+                puntaje, defecto = "SCORE()", DEFAULT_TEXT_SCORE_COLUMN
+            if node.score_column != defecto:
                 puntaje += f" AS {node.score_column}"
         if node.columns is None:
             items = ["*"]
@@ -150,6 +152,9 @@ class PrintVisitor(Visitor):
         for valor in node.values:
             partes.append(str(valor))
         return "VECTOR(" + ", ".join(partes) + ")"
+
+    def visit_Match(self, node):
+        return f"MATCH({node.column}, {self._literal(node.query)})"
 
     def visit_SimilarTo(self, node):
         return f"SIMILAR_TO({self._literal(node.query)}, k={node.k})"

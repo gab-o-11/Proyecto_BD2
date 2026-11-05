@@ -24,6 +24,10 @@ Lo que el sistema **no** hace, para no buscarlo:
 - `CREATE INDEX` no admite columnas `POINT`, que ya tienen su R-Tree, ni índices agrupados.
 - Las tablas creadas antes del mapa de bits de `NULL` no admiten valores nulos hasta recrearlas.
 - La columna del índice principal no admite `NULL`.
+- Un scan lee los textos de todas las columnas `TEXT` aunque la consulta no las proyecte.
+- Un índice `FULLTEXT` no se actualiza por partes: cualquier cambio en la tabla obliga a reconstruirlo completo en la siguiente búsqueda.
+- `MATCH` no admite `JOIN`, `OR`, frases exactas ni búsquedas por proximidad (el índice no guarda posiciones).
+- La compactación de `tabla.txt` no es atómica: si el proceso cae entre el reemplazo del archivo y la reescritura de las referencias, los textos de esa tabla quedan inaccesibles.
 
 ## Transacciones
 
@@ -36,6 +40,6 @@ Lo que el sistema **no** hace, para no buscarlo:
 
 <div align="center">
 
-[← Pruebas](10-pruebas.md) · [Inicio](../README.md)
+[← Pruebas](10-pruebas.md) · [Inicio](../README.md) · [Búsqueda de texto →](12-texto.md)
 
 </div>
