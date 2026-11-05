@@ -15,3 +15,16 @@ backend/.venv
 !data/generar_demo.py
 
 /.venv-entrenamiento/
+
+# Publicar solo modelos finales y sus informes, sin datasets ni checkpoints.
+!data/modelos/
+data/modelos/*
+!data/modelos/README.md
+!data/modelos/fotos/
+!data/modelos/audio_msd/
+data/modelos/fotos/*
+data/modelos/audio_msd/*
+!data/modelos/fotos/vocabulary.json
+!data/modelos/fotos/training.json
+!data/modelos/audio_msd/vocabulary.json
+!data/modelos/audio_msd/training.json
