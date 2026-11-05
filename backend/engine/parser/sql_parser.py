@@ -2,7 +2,8 @@ import math
 import sys
 from .scanner import Scanner, LexicalError
 from .tokens import TokenType
-from .nodes import Analyze, And, BeginTransaction, Between, ColumnDef, ColumnRef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, Update, aggregate_name
+from .nodes import DEFAULT_SCORE_COLUMN, Analyze, And, BeginTransaction, Between, ColumnDef, ColumnRef, Compare, CreateIndex, CreateTable, Delete, Distance, DropIndex, DropTable, EndTransaction, Explain, InList, Insert, IsNull, Join, Like, Not, Or, Point, Polygon, Intersection, Select, SimilarTo, Update, VectorLiteral, aggregate_name, contains_similar
+from ..vectorial.metricas import METRICAS
 
 
 class ParseError(Exception):
@@ -24,6 +25,17 @@ AGGREGATE_FUNCS = ("COUNT", "SUM", "AVG", "MIN", "MAX")
 INDEX_KINDS = ("HASH", "BPLUS", "BPLUS_CLUSTERED")
 
 SECONDARY_KINDS = ("HASH", "BPLUS")
+
+VECTOR_KINDS = ("IVF", "HNSW")
+
+VECTOR_INDEX_OPTIONS = {
+    "IVF": ("METRIC", "LISTS"),
+    "HNSW": ("METRIC", "M", "EF_CONSTRUCTION"),
+}
+
+SEARCH_METHODS = ("IVF", "HNSW", "SEQ")
+
+SEARCH_OPTIONS = ("METRIC", "PROBES", "EF_SEARCH")
 
 class Parser:
     def __init__(self, scanner: Scanner):
@@ -109,17 +121,28 @@ class Parser:
     # select -> SELECT select_list FROM table [alias] { [INNER] JOIN table [alias] ON col = col } [where] [group] [order]
     def _select(self):
         projection = None
+        puntajes = []
         if self._match(TokenType.STAR):
             columnas = None
             agregados = None
+            if self._match(TokenType.COMMA):
+                nombre = self._expect(TokenType.IDENTIFIER, "SIMILARITY_SCORE()")
+                if nombre.lexeme.upper() != "SIMILARITY_SCORE" or not self._match(TokenType.LPAREN):
+                    raise ParseError(f"Línea {nombre.line}: después de '*' solo se admite SIMILARITY_SCORE()")
+                self._score(puntajes)
         else:
             columnas = []
             agregados = []
-            projection = [self._select_item(columnas, agregados)]
+            projection = [self._select_item(columnas, agregados, puntajes)]
             while self._match(TokenType.COMMA):
-                projection.append(self._select_item(columnas, agregados))
+                projection.append(self._select_item(columnas, agregados, puntajes))
             if not agregados:
                 agregados = None
+        if len(puntajes) > 1:
+            raise ParseError(f"Línea {self.previous.line}: SIMILARITY_SCORE() solo puede aparecer una vez")
+        if puntajes and agregados:
+            raise ParseError(f"Línea {self.previous.line}: SIMILARITY_SCORE() no se combina con agregaciones")
+        linea_select = self.previous.line
 
         self._expect(TokenType.FROM, "FROM")
         tabla = self._expect(TokenType.IDENTIFIER, "nombre de tabla").lexeme
@@ -143,6 +166,15 @@ class Parser:
         if self._match(TokenType.WHERE):
             condicion = self._condition()
 
+        metodo = None
+        opciones = ()
+        if self._match(TokenType.USING):
+            if not contains_similar(condicion):
+                raise ParseError(f"Línea {self.previous.line}: USING en SELECT requiere SIMILAR_TO en WHERE")
+            metodo, opciones = self._busqueda()
+        if puntajes and not contains_similar(condicion):
+            raise ParseError(f"Línea {linea_select}: SIMILARITY_SCORE() requiere SIMILAR_TO en WHERE")
+
         group_by = None
         if self._match(TokenType.GROUP):
             self._expect(TokenType.BY, "BY")
@@ -155,6 +187,8 @@ class Parser:
             order_by = self._expression()
             if isinstance(order_by, Intersection):
                 raise ParseError(f"Línea {self.previous.line}: INTERSECTA solo se admite en WHERE")
+            if isinstance(order_by, SimilarTo):
+                raise ParseError(f"Línea {self.previous.line}: SIMILAR_TO solo se admite en WHERE")
             order_desc = self._match(TokenType.DESC)
             if not order_desc:
                 self._match(TokenType.ASC)
@@ -167,7 +201,47 @@ class Parser:
                 raise ParseError(f"Línea {token.line}: LIMIT debe ser un entero entre 0 y {sys.maxsize}")
 
         return Select(tabla, columnas, where=condicion, group_by=group_by, order_by=order_by,
-                      aggregates=agregados, order_desc=order_desc, table_alias=alias, joins=joins, projection=projection, limit=limit)
+                      aggregates=agregados, order_desc=order_desc, table_alias=alias, joins=joins, projection=projection, limit=limit,
+                      index_method=metodo, search_options=opciones, score_column=puntajes[0] if puntajes else None)
+
+    def _busqueda(self):
+        token = self._expect(TokenType.IDENTIFIER, "método de búsqueda (IVF, HNSW o SEQ)")
+        metodo = token.lexeme.upper()
+        if metodo not in SEARCH_METHODS:
+            raise ParseError(f"Línea {token.line}: método de búsqueda desconocido '{token.lexeme}'")
+        opciones = ()
+        if self._match(TokenType.WITH):
+            opciones = self._opciones(SEARCH_OPTIONS)
+        return metodo, opciones
+
+    def _opciones(self, validas):
+        opciones = [self._opcion(validas)]
+        while self._match(TokenType.COMMA):
+            opciones.append(self._opcion(validas))
+        vistas = set()
+        for nombre, _ in opciones:
+            if nombre in vistas:
+                raise ParseError(f"Línea {self.previous.line}: la opción '{nombre}' está repetida")
+            vistas.add(nombre)
+        return tuple(opciones)
+
+    def _opcion(self, validas):
+        token = self._expect(TokenType.IDENTIFIER, "nombre de opción")
+        nombre = token.lexeme.upper()
+        if nombre not in validas:
+            raise ParseError(f"Línea {token.line}: opción desconocida '{token.lexeme}'")
+        self._expect(TokenType.EQUAL, "'=' en la opción")
+        if nombre == "METRIC":
+            token = self._expect(TokenType.IDENTIFIER, "métrica (euclidean, cosine o dot)")
+            metrica = token.lexeme.lower()
+            if metrica not in METRICAS:
+                raise ParseError(f"Línea {token.line}: métrica desconocida '{token.lexeme}'")
+            return nombre, metrica
+        token = self._expect(TokenType.INT, f"entero positivo para {nombre}")
+        valor = int(token.lexeme)
+        if not 1 <= valor <= sys.maxsize:
+            raise ParseError(f"Línea {token.line}: {nombre} debe ser un entero positivo")
+        return nombre, valor
 
     def _expression(self):
         nombre = self._column_name()
@@ -186,6 +260,8 @@ class Parser:
             self._expect(TokenType.RPAREN, "')'")
             self._expect(TokenType.RPAREN, "')'")
             return Intersection(columna, Polygon(tuple(vertices)))
+        if nombre.upper() == "SIMILAR_TO":
+            return self._similar_to()
         if nombre.upper() != "DISTANCIA":
             raise ParseError(f"Línea {self.previous.line}: función espacial desconocida '{nombre}'")
         izquierda = self._point_operand()
@@ -199,6 +275,49 @@ class Parser:
                 raise ParseError(f"Línea {token.line}: métrica desconocida '{metrica}'")
         self._expect(TokenType.RPAREN, "')'")
         return Distance(izquierda, derecha, metrica)
+
+    def _similar_to(self):
+        if self._check(TokenType.VECTOR):
+            consulta = self._vector()
+        else:
+            token = self._expect(TokenType.STRING, "archivo de consulta entre comillas o VECTOR(...)")
+            consulta = token.lexeme[1:-1].replace("''", "'")
+        self._expect(TokenType.COMMA, "','")
+        parametro = self._expect(TokenType.IDENTIFIER, "k=<entero>")
+        if parametro.lexeme.lower() != "k":
+            raise ParseError(f"Línea {parametro.line}: SIMILAR_TO requiere k=<entero>")
+        self._expect(TokenType.EQUAL, "'=' después de k")
+        token = self._expect(TokenType.INT, "entero positivo para k")
+        k = int(token.lexeme)
+        if not 1 <= k <= sys.maxsize:
+            raise ParseError(f"Línea {token.line}: k debe ser un entero positivo")
+        self._expect(TokenType.RPAREN, "')'")
+        return SimilarTo(consulta, k)
+
+    def _vector(self):
+        self._expect(TokenType.VECTOR, "VECTOR")
+        self._expect(TokenType.LPAREN, "'('")
+        valores = [self._componente()]
+        while self._match(TokenType.COMMA):
+            valores.append(self._componente())
+        self._expect(TokenType.RPAREN, "')'")
+        return VectorLiteral(tuple(valores))
+
+    def _componente(self):
+        if not self._match(TokenType.INT, TokenType.FLOAT):
+            raise ParseError(
+                f"Línea {self.current.line}: se esperaba un número en VECTOR, "
+                f"se encontró {self._encontrado()}"
+            )
+        valor = float(self.previous.lexeme)
+        if not math.isfinite(valor):
+            raise ParseError(f"Línea {self.previous.line}: el componente '{self.previous.lexeme}' debe ser finito")
+        return valor
+
+    def _valor_fila(self):
+        if self._check(TokenType.VECTOR):
+            return self._vector()
+        return self._value()
 
     def _point_operand(self):
         if self._check(TokenType.POINT):
@@ -241,12 +360,22 @@ class Parser:
         return None
 
     # select_item -> IDENTIFIER '(' ( '*' | IDENTIFIER ) ')' | IDENTIFIER
-    def _select_item(self, columnas, agregados):
+    def _score(self, puntajes):
+        self._expect(TokenType.RPAREN, "')'")
+        alias = DEFAULT_SCORE_COLUMN
+        if self._match(TokenType.AS):
+            alias = self._expect(TokenType.IDENTIFIER, "alias de SIMILARITY_SCORE()").lexeme
+        puntajes.append(alias)
+        return alias
+
+    def _select_item(self, columnas, agregados, puntajes):
         nombre = self._column_name()
         if not self._match(TokenType.LPAREN):
             columnas.append(nombre)
             return nombre
         func = nombre.upper()
+        if func == "SIMILARITY_SCORE":
+            return self._score(puntajes)
         if func not in AGGREGATE_FUNCS:
             raise ParseError(
                 f"Línea {self.current.line}: función de agregación desconocida '{nombre}'"
@@ -278,9 +407,9 @@ class Parser:
 
     def _row(self):
         self._expect(TokenType.LPAREN, "'('")
-        valores = [self._value()]
+        valores = [self._valor_fila()]
         while self._match(TokenType.COMMA):
-            valores.append(self._value())
+            valores.append(self._valor_fila())
         self._expect(TokenType.RPAREN, "')'")
         return valores
 
@@ -306,7 +435,7 @@ class Parser:
     def _assignment(self):
         columna = self._expect(TokenType.IDENTIFIER, "nombre de columna").lexeme
         self._expect(TokenType.EQUAL, "'='")
-        return (columna, self._value())
+        return (columna, self._valor_fila())
 
     # create -> CREATE TABLE IDENTIFIER '(' column_def { ',' column_def } ')' [ USING IDENTIFIER ]
     def _create_table(self):
@@ -344,9 +473,16 @@ class Parser:
                     f"Línea {token.line}: un índice secundario no puede ser agrupado; "
                     f"el índice agrupado se define en CREATE TABLE ... USING BPLUS_CLUSTERED"
                 )
-            if tipo not in SECONDARY_KINDS:
+            if tipo not in SECONDARY_KINDS and tipo not in VECTOR_KINDS:
                 raise ParseError(f"Línea {token.line}: tipo de índice desconocido '{token.lexeme}'")
-        return CreateIndex(nombre, tabla, columna, tipo)
+        opciones = ()
+        if self._match(TokenType.WITH):
+            if tipo not in VECTOR_KINDS:
+                raise ParseError(f"Línea {self.previous.line}: WITH solo se admite en índices IVF o HNSW")
+            self._expect(TokenType.LPAREN, "'(' después de WITH")
+            opciones = self._opciones(VECTOR_INDEX_OPTIONS[tipo])
+            self._expect(TokenType.RPAREN, "')'")
+        return CreateIndex(nombre, tabla, columna, tipo, opciones)
 
     def _drop(self):
         if self._match(TokenType.TABLE):
@@ -378,9 +514,17 @@ class Parser:
             tipo, tam = "DATE", None
         elif self._match(TokenType.POINT):
             tipo, tam = "POINT", None
+        elif self._match(TokenType.VECTOR):
+            self._expect(TokenType.LPAREN, "'('")
+            token = self._expect(TokenType.INT, "dimensión de VECTOR")
+            tam = int(token.lexeme)
+            if tam <= 0:
+                raise ParseError(f"Línea {token.line}: la dimensión de VECTOR debe ser positiva")
+            self._expect(TokenType.RPAREN, "')'")
+            tipo = "VECTOR"
         else:
             raise ParseError(
-                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR, DATE o POINT), "
+                f"Línea {self.current.line}: se esperaba un tipo (INT, FLOAT, VARCHAR, DATE, POINT o VECTOR), "
                 f"se encontró {self._encontrado()}"
             )
         primary_key, not_null = self._column_constraints()
@@ -435,7 +579,7 @@ class Parser:
 
     def _predicate(self):
         columna = self._expression()
-        if isinstance(columna, Intersection):
+        if isinstance(columna, (Intersection, SimilarTo)):
             return columna
 
         if self._match(*COMPARISON_OPS):
