@@ -4,6 +4,7 @@ import tempfile
 
 import numpy as np
 
+from .exacta import knn_exacto, recall_at_k
 from .almacen import AlmacenVectores
 from .metricas import COSINE, DOT, EUCLIDEAN, distancia, distancias, score, validar_metrica
 
@@ -75,10 +76,28 @@ def _almacen():
         _falla(lambda: AlmacenVectores(ruta, 0), "dimensión no positiva")
 
 
+def _exacta():
+    datos = _vectores(5000, 16)
+    for metrica in (EUCLIDEAN, COSINE, DOT):
+        for k in (1, 10, 5000, 7000):
+            consulta = datos[17]
+            valores = distancias(consulta, datos, metrica)
+            orden = sorted(zip(valores.tolist(), range(len(datos))))[:k]
+            resultado = knn_exacto(consulta, datos, k, metrica)
+            assert [i for _, i in resultado] == [i for _, i in orden], (metrica, k)
+    ids = np.array([3, 9, 12, 40])
+    assert {i for _, i in knn_exacto(datos[0], datos, 10, EUCLIDEAN, ids)} == {3, 9, 12, 40}
+    assert knn_exacto(datos[0], datos, 3, EUCLIDEAN, np.array([], dtype=np.int64)) == []
+    _falla(lambda: knn_exacto(datos[0], datos, 0, EUCLIDEAN), "k no positivo")
+    _cerca(recall_at_k([1, 2, 3, 4, 5], [1, 2, 3, 8, 9]), 0.6)
+    _cerca(recall_at_k([], []), 1.0)
+
+
 def main():
     _metricas()
+    _exacta()
     _almacen()
-    print("OK: métricas y almacén de vectores")
+    print("OK: métricas, búsqueda exacta y almacén de vectores")
 
 
 if __name__ == "__main__":
