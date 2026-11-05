@@ -62,6 +62,9 @@ class VectorTable:
     def _ruta_vector(self, columna):
         return os.path.join(self.data_dir, self.name + "_" + columna + "_vector")
 
+    def ruta_modelo(self, columna):
+        return self._ruta_vector(columna) + ".tfidf"
+
     def columnas_declaradas(self):
         if not self.almacenes:
             return list(self.columns)
@@ -104,6 +107,14 @@ class VectorTable:
             if valor is not None:
                 self._vector_agregar(columna, valor, row["__rid__"])
 
+    def cargar_vectores(self, columna, rids, vectores):
+        almacen = self.almacenes[columna]
+        for rid in rids:
+            almacen.borrar(rid)
+        almacen.agregar_lote(vectores, rids)
+        for indice in self._indices_de(columna):
+            indice.construir()
+
     def crear_indice_vectorial(self, nombre, columna, tipo, opciones):
         indice = IndiceVectorial(self, nombre, columna, tipo, opciones)
         indice.construir()
@@ -124,5 +135,7 @@ class VectorTable:
     def _destruir_vectorial(self):
         for indice in self.indices_vectoriales.values():
             indice.destruir()
-        for almacen in self.almacenes.values():
+        for columna, almacen in self.almacenes.items():
             almacen.destruir()
+            if os.path.exists(self.ruta_modelo(columna)):
+                os.remove(self.ruta_modelo(columna))

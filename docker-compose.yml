@@ -6,6 +6,7 @@ services:
     volumes:
       - runtime:/app/data/runtime
       - ./data/demo:/app/data/demo
+      - ./data/multimedia:/app/data/multimedia:ro
     restart: unless-stopped
 
   frontend:
