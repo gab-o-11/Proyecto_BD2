@@ -3,20 +3,12 @@ from pathlib import Path
 import hashlib
 import json
 import math
-import random
 
 @dataclass(frozen=True)
 class Vocabulary:
     descriptor_id: str
     dimension: int
-    centroide: tuple[Vector, ...]
-    def __post_init__(self):
-        batch = DescriptorBatch(
-            self.descriptor_id, self.dimension, self.centroids
-        )
-        if not batch.values:
-            raise ValueError("el vocabulario necesita al menos un centroide")
-        object.__setattr__(self, "centroids", batch.values)
+    centroids: tuple[tuple[float, ...], ...]
 
     @property
     def size(self):
@@ -59,7 +51,7 @@ def load_vocabulary(path):
         raise ValueError("el contenido no corresponde al vocabulary_id")
     return vocabulary
     
-def squared_distance(left: Vector, right: Vector):
+def squared_distance(left: tuple[float, ...], right: tuple[float, ...]):
     if len(left) != len(right):
         raise ValueError("no se pueden comparar dimensiones distintas")
     value = sum((a - b) * (a - b) for a, b in zip(left, right))
@@ -67,7 +59,7 @@ def squared_distance(left: Vector, right: Vector):
         raise ValueError("distancia fuera del rango numérico")
     return value
 
-def nearest_word(descriptor: Vector, centroids: tuple[Vector, ...]):
+def nearest_word(descriptor: tuple[float, ...], centroids: tuple[tuple[float, ...], ...]):
     return min(
         range(len(centroids)),
         key=lambda index: squared_distance(descriptor, centroids[index]),
