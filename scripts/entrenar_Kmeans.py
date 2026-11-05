@@ -1,55 +1,3 @@
-#!/usr/bin/env python3
-"""Entrena un vocabulario multimedia, sin arrancar el backend (Python 3.10+).
-
-INSTALAR, una vez, en tu entorno virtual:
-    python -m pip install "numpy>=1.24,<2.3"
-    python -m pip install "opencv-python-headless==4.11.0.86"  # imágenes
-    python -m pip install "librosa==0.11.0"                    # audio
-
-EJECUTAR, desde la raíz del proyecto, con el dataset descomprimido:
-    python scripts/entrenar_Kmeans.py --dataset /ruta/imagenes --salida data/modelos/fotos
-    python scripts/entrenar_Kmeans.py --dataset /ruta/audios --tipo audio --salida data/modelos/audio
-    # Repetir el mismo comando con --reanudar después de interrumpirlo.
-    # --iteraciones puede aumentarse al reanudar; las otras opciones se conservan.
-    python scripts/entrenar_Kmeans.py --autoprueba
-
-También acepta --tipo descriptores: un .npy por objeto, matriz (N, D),
-o un solo .npy con todos los descriptores. Requiere --descriptor-id identificador
-de tu extractor/configuración. En el segundo caso aumenta --por-archivo.
-No admite ZIP, tablas de metadatos ni imágenes y audio mezclados en un modelo.
-
-SALIDAS (creadas al ejecutar, no al importar):
-    vocabulary.json: centroides, dimensión, descriptor_id y vocabulary_id.
-    training.json: configuración, inercia, convergencia y ocupación de grupos.
-    run.json, sample.npy, checkpoint.npz, cache/: permiten reanudar.
-    omitidos.jsonl: archivos ilegibles o sin descriptores.
-
-K-Means++ y las iteraciones de Lloyd se implementan aquí con NumPy. No usan
-sklearn ni GPU. Los adaptadores SIFT/MFCC usan bibliotecas para preparar el
-entrenamiento; no implementan los futuros módulos del motor ni histogramas.
-Se entrena sobre una muestra aleatoria limitada, no sobre todo el dataset:
-por defecto hasta 10 000 archivos, 256 descriptores/archivo y 100 000 en total.
-La extracción procesa un archivo a la vez; las distancias se calculan por lotes.
-El audio usa los primeros 30 s por archivo (ajustable). El límite de memoria
-se refiere a descriptores/distancias, no al tamaño de una imagen al decodificarla.
-
-Las imagenes reutilizan SiftExtractor del gestor (512 px, 500 puntos por defecto),
-sin normalizacion L2 adicional.
-Para consultas futuras conserva EXACTAMENTE el extractor, preprocesamiento y
-normalización de training.json. Cambiarlos requiere volver a entrenar. El JSON
-del vocabulario es compatible con Vocabulary/load_vocabulary de la guía.
-No cambies el dataset durante una ejecución. La reanudación comprueba rutas,
-tamaños y fechas de modificación; no calcula un hash del contenido multimedia.
-Ctrl+C conserva la última iteración completa y los archivos ya preparados.
-Se impiden dos escritores sobre la misma salida con flock en Unix o msvcrt en Windows.
-
-Referencias de los adaptadores:
-https://docs.opencv.org/4.x/da/df5/tutorial_py_sift_intro.html
-https://librosa.org/doc/0.11.0/generated/librosa.load.html
-https://librosa.org/doc/0.11.0/generated/librosa.feature.mfcc.html
-https://numpy.org/doc/stable/reference/generated/numpy.load.html
-"""
-
 from __future__ import annotations
 
 import argparse
@@ -73,6 +21,7 @@ VERSION = 1
 EXTENSIONS = {
     "imagenes": {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"},
     "audio": {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".aiff", ".aif"},
+    "audio-msd": {".h5", ".hdf5"},
     "descriptores": {".npy"},
 }
 
@@ -87,7 +36,6 @@ def digest(data):
 
 
 def atomic_write(path, writer):
-    """Publica un archivo completo; interrumpir la escritura no daña el previo."""
     path = Path(path)
     temporary = None
     try:
@@ -98,7 +46,6 @@ def atomic_write(path, writer):
             os.fsync(file.fileno())
         os.replace(temporary, path)
     finally:
-        # En Windows el archivo debe estar cerrado antes de poder eliminarlo.
         if temporary is not None:
             temporary.unlink(missing_ok=True)
 
@@ -160,14 +107,13 @@ def discover(args):
     if args.tipo == "auto":
         if len(kinds) != 1:
             raise ValueError(
-                "no hay una modalidad única; usa --tipo imagenes, audio o "
+                "no hay una modalidad única; usa --tipo imagenes, audio, audio-msd o "
                 "descriptores (el dataset debe estar descomprimido)"
             )
         args.tipo = kinds[0]
     paths = groups[args.tipo]
     if not paths:
         raise ValueError(f"no hay archivos compatibles con --tipo {args.tipo}")
-    # Muestrear sobre la lista completa evita elegir solo las primeras clases.
     total = len(paths)
     if args.max_archivos and total > args.max_archivos:
         rng = np.random.default_rng(args.semilla)
@@ -186,7 +132,6 @@ def discover(args):
 def make_extractor(args):
     """Devuelve una función archivo -> (N,D) y su configuración reproducible."""
     if args.tipo == "imagenes":
-        # Reutilizar el mismo extractor de las consultas, sin otro contrato.
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
         from engine.multimedia.local_features import SiftExtractor
         import cv2
@@ -197,6 +142,20 @@ def make_extractor(args):
         config = {"extractor": "sift", "descriptor_id": extractor.descriptor_id,
                   "opencv": cv2.__version__, "max_side": args.max_lado,
                   "nfeatures": 500, "normalization": "none"}
+
+        def extract(path):
+            return extractor.extract(path).values
+
+    elif args.tipo == "audio-msd":
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
+        from engine.multimedia.audio_features import MsdTimbreExtractor
+        import h5py
+        if args.normalizacion not in ("auto", "none"):
+            raise ValueError("el lector MSD del gestor usa timbre sin normalizacion adicional")
+        extractor = MsdTimbreExtractor()
+        config = {"extractor": "msd-timbre", "descriptor_id": extractor.descriptor_id,
+                  "h5py": h5py.__version__, "field": "analysis/segments_timbre",
+                  "dimension": 12, "normalization": "none"}
 
         def extract(path):
             return extractor.extract(path).values
@@ -241,7 +200,6 @@ def make_extractor(args):
 
 
 def prepare_rows(rows, per_file, seed, normalization):
-    """Muestreo por objeto; nunca acepta listas de IDs como descriptores."""
     if rows.ndim != 2 or rows.shape[1] < 1 or rows.dtype.kind not in "fiu":
         raise ValueError("se esperaba una matriz numérica real (N, D)")
     rng = np.random.default_rng(seed)
@@ -259,8 +217,6 @@ def prepare_rows(rows, per_file, seed, normalization):
 
 
 class DescriptorReservoir:
-    """Muestra uniforme por prioridades sin copiar toda la matriz por archivo."""
-
     def __init__(self, capacity, dimension, seed):
         self.rows = np.empty((capacity, dimension), dtype=np.float64)
         self.priorities = np.empty(capacity)
@@ -331,15 +287,11 @@ def prepare_sample(args, paths, entries, extract, config, output):
                     log(f"Omitido {path.name}: {error}")
                 continue
             if not cached:
-                # Errores de escritura (p. ej., disco lleno) deben detener el
-                # trabajo, no confundirse con un archivo multimedia inválido.
                 save_array(target, rows)
             if reservoir is None:
                 reservoir = DescriptorReservoir(args.max_descriptores, rows.shape[1], args.semilla)
             if rows.shape[1] != reservoir.rows.shape[1]:
                 raise ValueError(f"dimensiones incompatibles en {path}; no mezcles extractores")
-            # Reservorio por prioridades: mantiene una muestra uniforme de los
-            # descriptores que sobrevivieron al límite por objeto, sin crecer con N.
             reservoir.add(rows)
             seen += len(rows)
             good += 1
@@ -363,8 +315,6 @@ def assignment(rows, centers, batch_size):
     for start in range(0, len(rows), batch_size):
         block = np.asarray(rows[start:start + batch_size], dtype=np.float64)
         distances = np.empty((len(block), len(centers)), dtype=np.float64)
-        # Restar antes de elevar al cuadrado evita cancelación numérica de
-        # ||x||² + ||c||² - 2 x.c para descriptores con offsets grandes.
         for index, center in enumerate(centers):
             delta = block - center
             distances[:, index] = np.einsum("ij,ij->i", delta, delta)
@@ -375,7 +325,6 @@ def assignment(rows, centers, batch_size):
 
 
 def initialize(rows, k, batch_size, seed):
-    """K-Means++: el siguiente centro se elige proporcionalmente a D²."""
     if len(rows) < k:
         raise ValueError("K supera la cantidad de descriptores")
     rng = np.random.default_rng(seed)
@@ -550,7 +499,6 @@ def validate(args, command):
 
 
 def self_test():
-    """Prueba de extremo a extremo, todo en un directorio temporal."""
     if np is None:
         raise ValueError("la autoprueba requiere NumPy")
     with tempfile.TemporaryDirectory(prefix="bd2-kmeans-") as directory:
@@ -593,14 +541,11 @@ def self_test():
             pass
         else:
             raise AssertionError("debió rechazarse NaN")
-        # Distancias correctas aunque las coordenadas compartan un offset grande.
         rows = np.array([[1e10, 1e10], [1e10 + 3, 1e10 + 4]])
         _, _, labels, distances = next(assignment(rows, rows[:1], 2))
         assert labels.tolist() == [0, 0] and distances.tolist() == [0., 25.]
         normalized = prepare_rows(np.array([[0., 0.], [3., 4.]]), 10, 42, "l2")
         assert np.allclose(normalized, [[0.6, 0.8]])
-        # El muestreo por lotes coincide con tomar las menores prioridades
-        # de todos los datos; nunca excede el límite de memoria configurado.
         population = np.arange(100, dtype=np.float64).reshape(-1, 1)
         reservoir = DescriptorReservoir(7, 1, 42)
         for offset in range(0, 100, 11):
@@ -608,8 +553,6 @@ def self_test():
         expected = np.argsort(np.random.default_rng(42).random(100))[:7]
         assert set(reservoir.values[:, 0]) == set(expected)
         assert reservoir.values.shape == (7, 1)
-        # Una interrupción en extracción permite reutilizar los archivos ya
-        # cacheados; la muestra reconstruida debe ser idéntica a la continua.
         resume_args = parser().parse_args(argv)
         paths, dataset_info = discover(resume_args)
         extractor, config = make_extractor(resume_args)
@@ -645,7 +588,6 @@ def self_test():
         finally:
             resumed._mmap.close()
             continuous._mmap.close()
-        # Atomicidad: un fallo de escritura conserva el archivo anterior.
         atomic = root / "atomic.json"
         save_json(atomic, {"value": "original"})
 
