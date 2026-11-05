@@ -43,9 +43,11 @@ audio = ExtractFeatures(
 
 Usa `histograma(ruta)` con el extractor correspondiente. Los histogramas, el modelo
 TF-IDF y el indice deben prepararse por coleccion; no estan incluidos en estos
-archivos. El registro automatico de los vocabularios en la API sigue pendiente.
+archivos. La API registra automaticamente los vocabularios disponibles mediante
+`FeaturePipeline`; la carga de cada tabla se solicita por su endpoint de features.
 No se debe entrenar durante una consulta. Si cambias un vocabulario, reconstruye
 sus histogramas, TF-IDF e indices para conservar la compatibilidad.
 
 Para volver a entrenar, consulta los lanzadores `scripts/entrenar_fotos.ps1` y
-`scripts/entrenar_audio.ps1`, y las instrucciones de `scripts/README-audio.md`.
+`scripts/entrenar_audio.ps1`. La integracion con el servidor se explica en
+[Pipeline multimedia](../../docs/13-multimedia.md).

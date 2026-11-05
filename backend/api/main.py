@@ -12,16 +12,18 @@ from engine.parser.executor import Executor
 from engine.transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from engine.catalog import STRLEN, StorageTable
 from engine.importer import CSVImportError, parse_csv
-from engine.multimedia.extract_features import ColeccionesMultimedia
+from engine.multimedia.pipeline import FeaturePipeline
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_DIR = os.path.dirname(BACKEND_DIR)
 DATA_DIR = os.environ.get("BD2_DATA_DIR") or os.path.join(PROJECT_DIR, "data", "runtime")
-MULTIMEDIA_DIR = os.environ.get("BD2_MULTIMEDIA_DIR") or os.path.join(PROJECT_DIR, "data", "multimedia")
+MULTIMEDIA_DIR = os.environ.get("BD2_MULTIMEDIA_DIR") or os.path.join(PROJECT_DIR, "data", "datasets")
+
+MODELS_DIR = os.environ.get("BD2_MODELS_DIR") or os.path.join(PROJECT_DIR, "data", "modelos")
 
 catalog = create_catalog(DATA_DIR)
 transaction_manager = TransactionManager()
-multimedia = ColeccionesMultimedia(MULTIMEDIA_DIR)
+multimedia = FeaturePipeline(MULTIMEDIA_DIR, MODELS_DIR)
 
 app = FastAPI(title="MiniGestor BD2")
 
@@ -85,6 +87,11 @@ def _project(columns, rows):
 @app.get("/api/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/api/multimedia/models")
+def modelos_multimedia():
+    return {"models": multimedia.modelos()}
 
 
 @app.get("/api/tables")
