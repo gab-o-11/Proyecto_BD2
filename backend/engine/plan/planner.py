@@ -1,6 +1,7 @@
 from . import costos
 from .costos import Perfil, ajustar_filas
-from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Rango, Resultado, SeqScan, Sort, SpatialIndexScan
+from .nodos import Agregacion, Filtro, HashJoin, IndexScan, Limite, Modificar, Rango, Resultado, SeqScan, Sort, SpatialIndexScan, VectorIndexScan, VectorSeqScan
+from ..vectorial.hnsw import EF_SEARCH
 
 DESIGUALDADES = (">", ">=", "<", "<=")
 
@@ -127,3 +128,29 @@ def indice_espacial(tabla, columna, operacion, consulta, detalle, filas, extra_c
     filas = ajustar_filas(min(filas, max(perfil.filas, 1)))
     inicio, total = costos.costo_spatial_scan(perfil, arbol.height, arbol.max_entries, filas, extra_cpu)
     return SpatialIndexScan(tabla, columna, operacion, consulta, detalle).estimar(inicio, total, filas, perfil.ancho)
+
+
+def indice_vectorial(tabla, indice, consulta, k, parametros, puntaje):
+    perfil = Perfil(tabla)
+    almacen = indice.almacen
+    filas = ajustar_filas(min(k, max(len(almacen), 1)))
+    estructura = indice.estructura
+    if indice.tipo == "IVF":
+        lists = estructura.lists
+        probes = parametros.get("probes", estructura.probes_por_defecto())
+        inicio, total = costos.costo_vector_ivf(perfil, len(almacen), almacen.dimension, lists, probes, k)
+        ajustes = "lists=" + str(lists) + ", probes=" + str(probes)
+    else:
+        ef_search = max(parametros.get("ef_search", EF_SEARCH), k)
+        inicio, total = costos.costo_vector_hnsw(perfil, len(almacen), almacen.dimension, estructura.m, ef_search, k)
+        ajustes = "m=" + str(estructura.m) + ", ef_search=" + str(ef_search)
+    nodo = VectorIndexScan(tabla, indice, consulta, k, parametros, puntaje, ajustes)
+    return nodo.estimar(inicio, total, filas, perfil.ancho)
+
+
+def escaneo_vectorial(tabla, almacen, consulta, k, metrica, puntaje, nota=None):
+    perfil = Perfil(tabla)
+    filas = ajustar_filas(min(k, max(len(almacen), 1)))
+    inicio, total = costos.costo_vector_exacto(perfil, len(almacen), almacen.dimension, k)
+    nodo = VectorSeqScan(tabla, almacen, consulta, k, metrica, puntaje, nota)
+    return nodo.estimar(inicio, total, filas, perfil.ancho)

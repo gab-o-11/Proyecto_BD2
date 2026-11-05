@@ -22,6 +22,7 @@ class TokenType(Enum):
     TRANSACTION = auto()
     END = auto()
     USING = auto()
+    WITH = auto()
     EXPLAIN = auto()
     ANALYZE = auto()
     JOIN = auto()
@@ -32,6 +33,7 @@ class TokenType(Enum):
     DESC = auto()
     LIMIT = auto()
     POINT = auto()
+    VECTOR = auto()
     INDEX = auto()
     DROP = auto()
     IF = auto()
@@ -86,6 +88,7 @@ class TokenType(Enum):
 KEYWORDS = {
     "LIMIT": TokenType.LIMIT,
     "POINT": TokenType.POINT,
+    "VECTOR": TokenType.VECTOR,
     "JOIN": TokenType.JOIN,
     "INNER": TokenType.INNER,
     "ON": TokenType.ON,
@@ -109,6 +112,7 @@ KEYWORDS = {
     "TRANSACTION": TokenType.TRANSACTION,
     "END": TokenType.END,
     "USING": TokenType.USING,
+    "WITH": TokenType.WITH,
     "EXPLAIN": TokenType.EXPLAIN,
     "ANALYZE": TokenType.ANALYZE,
     "FLOAT": TokenType.FLOAT_TYPE,

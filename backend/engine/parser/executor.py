@@ -4,7 +4,7 @@ import re
 import struct
 import time
 from .visitor import PrintVisitor, Visitor
-from .nodes import And, Between, ColumnRef, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, aggregate_name, condition_columns, expression_columns
+from .nodes import DEFAULT_SCORE_COLUMN, And, Between, ColumnRef, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, SimilarTo, VectorLiteral, aggregate_name, condition_columns, contains_similar, expression_columns
 from ..catalog import StorageTable, nombres_de_indices
 from ..transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from ..plan import Predicado, Rango, base_de, planner, reporte
@@ -13,8 +13,10 @@ from ..plan.costos import Perfil
 from ..plan.nodos import COMPARADORES, Calificar, IndexScan, SpatialIndexScan
 from ..spatial import distance, point
 from ..spatial_table import SpatialTable
+from ..vectorial.metricas import COSINE
 from ..rtree import contains_point, validate_polygon
 from dataclasses import replace
+import numpy as np
 from datetime import date
 
 
@@ -110,13 +112,14 @@ class Table(SpatialTable):
 
 
 class Executor(Visitor):
-    def __init__(self, catalog=None, transaction_manager=None, data_dir=None, parameters=None):
+    def __init__(self, catalog=None, transaction_manager=None, data_dir=None, parameters=None, vectorizador=None):
         self.catalog = catalog if catalog is not None else {}
         self.plan = []
         self.paginas_tocadas = set()
         self.transaction_manager = transaction_manager or TransactionManager()
         self.data_dir = data_dir
         self.parameters = parameters or {}
+        self.vectorizador = vectorizador
 
     def execute(self, sentencias):
         for resultado in self.run(sentencias):
@@ -191,9 +194,12 @@ class Executor(Visitor):
     def _plan_insert(self, node):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla, LockMode.PX)
-        columnas = list(tabla.columns)
+        almacenes = getattr(tabla, "almacenes", {})
+        columnas = tabla.columnas_declaradas() if almacenes else list(tabla.columns)
         if node.columns is not None:
-            columnas = [self._columna(tabla, c) for c in node.columns]
+            columnas = []
+            for c in node.columns:
+                columnas.append(c if c in almacenes else self._columna(tabla, c))
             if len(columnas) != len(set(columnas)):
                 raise SemanticError("hay columnas repetidas en INSERT")
         filas = []
@@ -204,6 +210,8 @@ class Executor(Visitor):
                     f"({', '.join(columnas)}) y se dieron {len(valores)}"
                 )
             fila = {c: None for c in tabla.columns}
+            for c in almacenes:
+                fila[c] = None
             fila.update(zip(columnas, valores))
             filas.append(self._validar_fila(tabla, fila))
         self._validar_claves(tabla, filas)
@@ -242,8 +250,16 @@ class Executor(Visitor):
         return {"message": f"{raiz.afectadas} fila(s) eliminada(s) de '{raiz.tabla.name}'"}
 
     def _plan_select(self, node):
-        raiz, tabla = self._fuente_select(node)
+        similar = self._similar_de(node.where)
+        puntaje = None
+        if similar is None:
+            raiz, tabla = self._fuente_select(node)
+        else:
+            puntaje = node.score_column or DEFAULT_SCORE_COLUMN
+            raiz, tabla = self._fuente_similitud(node, similar, puntaje)
         columnas = list(tabla.columns) if node.columns is None else [self._columna(tabla, c) for c in node.columns]
+        if node.columns is None and node.score_column is not None:
+            columnas.append(puntaje)
         grupo = None if node.group_by is None else self._columna(tabla, node.group_by)
 
         if node.group_by is not None:
@@ -263,13 +279,15 @@ class Executor(Visitor):
 
         if node.projection is not None:
             agregaciones = {aggregate_name(func, arg) for func, arg in node.aggregates or []}
-            columnas = [c if c in agregaciones else self._columna(tabla, c) for c in node.projection]
+            columnas = [c if c in agregaciones or c == node.score_column else self._columna(tabla, c) for c in node.projection]
             if len(columnas) != len(set(columnas)):
                 raise SemanticError("hay columnas repetidas en el resultado")
 
         if node.order_by is not None:
             orden = node.order_by
             disponibles = columnas if node.group_by is not None or node.aggregates is not None else tabla.columns
+            if puntaje is not None and node.group_by is None and node.aggregates is None:
+                disponibles = list(tabla.columns) + [puntaje]
             if isinstance(orden, Distance):
                 key_fn = self._distancia(tabla, orden, disponibles)
                 indice = None
@@ -287,7 +305,7 @@ class Executor(Visitor):
                         indice = self._knn_filtrado(actual, target, texto, node.where, node.limit, raiz, key_fn)
                 raiz = indice if indice is not None else planner.ordenar(raiz, texto, MEM_BUDGET, node.order_desc, key_fn)
             else:
-                if orden not in columnas:
+                if orden not in columnas and orden != puntaje:
                     orden = self._columna(tabla, orden)
                 if orden not in disponibles:
                     raise SemanticError(f"la columna '{node.order_by}' no está disponible para ORDER BY")
@@ -297,6 +315,102 @@ class Executor(Visitor):
             raiz = planner.limitar(raiz, node.limit)
 
         return raiz, columnas, tabla
+
+    @staticmethod
+    def _similar_de(where):
+        if not contains_similar(where):
+            return None
+        if isinstance(where, SimilarTo):
+            return where
+        if not isinstance(where, And):
+            raise SemanticError("SIMILAR_TO solo se combina con otras condiciones mediante AND")
+        encontrados = []
+        for parte in where.conditions:
+            if isinstance(parte, SimilarTo):
+                encontrados.append(parte)
+            elif contains_similar(parte):
+                raise SemanticError("SIMILAR_TO solo se combina con otras condiciones mediante AND")
+        if len(encontrados) > 1:
+            raise SemanticError("una consulta admite un solo SIMILAR_TO")
+        return encontrados[0]
+
+    def _fuente_similitud(self, node, similar, puntaje):
+        tabla = self._tabla(node.table)
+        self._bloquear_tabla(tabla, LockMode.PS)
+        if node.joins or node.table_alias is not None:
+            raise SemanticError("SIMILAR_TO no admite JOIN ni alias de tabla")
+        almacenes = getattr(tabla, "almacenes", {})
+        if len(almacenes) != 1:
+            raise SemanticError(f"SIMILAR_TO requiere que '{tabla.name}' tenga exactamente una columna VECTOR")
+        if puntaje in tabla.columns:
+            raise SemanticError(f"el alias '{puntaje}' coincide con una columna de '{tabla.name}'")
+        columna = next(iter(almacenes))
+        almacen = almacenes[columna]
+        consulta = self._vector_consulta(tabla, similar.query, almacen.dimension)
+        opciones = dict(node.search_options)
+        if "PROBES" in opciones and node.index_method != "IVF":
+            raise SemanticError("PROBES solo se admite con USING IVF")
+        if "EF_SEARCH" in opciones and node.index_method != "HNSW":
+            raise SemanticError("EF_SEARCH solo se admite con USING HNSW")
+        raiz = self._acceso_vectorial(tabla, columna, almacen, consulta, similar.k, node.index_method, opciones, puntaje)
+        if isinstance(node.where, And):
+            resto = []
+            for parte in node.where.conditions:
+                if parte is not similar:
+                    resto.append(parte)
+            predicado, seleccion = self._predicado(tabla, resto[0] if len(resto) == 1 else And(tuple(resto)))
+            raiz = planner.filtrar(raiz, predicado, selectividad=seleccion)
+        return raiz, tabla
+
+    def _vector_consulta(self, tabla, consulta, dimension):
+        if isinstance(consulta, VectorLiteral):
+            with np.errstate(over="ignore"):
+                vector = np.array(consulta.values, dtype=np.float32)
+        elif self.vectorizador is None:
+            raise SemanticError("no hay un extractor configurado para consultar por archivo; usa SIMILAR_TO(VECTOR(...), k=...)")
+        else:
+            try:
+                vector = np.asarray(self.vectorizador(tabla, consulta), dtype=np.float32)
+            except (ValueError, OSError) as error:
+                raise SemanticError(str(error))
+        if vector.shape != (dimension,):
+            raise SemanticError(f"la consulta debe ser un vector de dimensión {dimension} y llegó {vector.shape}")
+        if not np.isfinite(vector).all():
+            raise SemanticError("el vector de consulta excede el rango de FLOAT")
+        return vector
+
+    def _acceso_vectorial(self, tabla, columna, almacen, consulta, k, metodo, opciones, puntaje):
+        metrica = opciones.get("METRIC")
+        if metodo is None:
+            metrica = COSINE
+        parametros = {}
+        if "PROBES" in opciones:
+            parametros["probes"] = opciones["PROBES"]
+        if "EF_SEARCH" in opciones:
+            parametros["ef_search"] = opciones["EF_SEARCH"]
+        candidatos = []
+        if metodo != "SEQ":
+            for nombre in sorted(tabla.indices_vectoriales):
+                indice = tabla.indices_vectoriales[nombre]
+                if indice.columna != columna:
+                    continue
+                if metodo is not None and indice.tipo != metodo:
+                    continue
+                if metrica is not None and indice.metrica != metrica:
+                    continue
+                candidatos.append(planner.indice_vectorial(tabla, indice, consulta, k, parametros, puntaje))
+        if metodo in ("IVF", "HNSW"):
+            if candidatos:
+                return candidatos[0]
+            nota = f"no existe un índice {metodo}"
+            if metrica is not None:
+                nota += f" con métrica {metrica}"
+            return planner.escaneo_vectorial(tabla, almacen, consulta, k, metrica or COSINE, puntaje, nota + "; búsqueda lineal")
+        mejor = planner.escaneo_vectorial(tabla, almacen, consulta, k, metrica or COSINE, puntaje)
+        for candidato in candidatos:
+            if candidato.costo_total < mejor.costo_total:
+                mejor = candidato
+        return mejor
 
     def _fuente_select(self, node):
         izquierda = self._tabla(node.table)
@@ -496,6 +610,8 @@ class Executor(Visitor):
     def _acceso(self, tabla, where):
         if where is None:
             return planner.acceso(tabla, None)
+        if contains_similar(where):
+            raise SemanticError("SIMILAR_TO solo se admite en SELECT")
         if self._es_espacial(where):
             return self._acceso_espacial(tabla, where)
         if self._es_simple(where):
@@ -855,6 +971,8 @@ class Executor(Visitor):
         return "str"
 
     def _convertir(self, tabla, columna, valor):
+        if isinstance(valor, VectorLiteral):
+            raise SemanticError(f"la columna '{columna}' no es de tipo VECTOR")
         tipo = self._tipo_columna(tabla, columna)
         if tipo == "point":
             try:
@@ -913,7 +1031,28 @@ class Executor(Visitor):
                 if isinstance(tabla, StorageTable) and len(valor.encode()) > tabla._string_size(columna):
                     raise SemanticError(f"el valor de '{columna}' excede el espacio de almacenamiento")
             salida[columna] = valor
+        for columna in getattr(tabla, "almacenes", {}):
+            if columna in salida:
+                salida[columna] = self._vector_de_fila(tabla, columna, salida[columna])
         return salida
+
+    def _vector_de_fila(self, tabla, columna, valor):
+        definition = tabla.column_definitions[columna]
+        if valor is None:
+            if definition.get("not_null"):
+                raise SemanticError(f"la columna '{columna}' no admite NULL")
+            return None
+        if isinstance(valor, np.ndarray):
+            return valor
+        if not isinstance(valor, VectorLiteral):
+            raise SemanticError(f"la columna VECTOR '{columna}' requiere VECTOR(...)")
+        if len(valor.values) != definition["size"]:
+            raise SemanticError(f"la columna '{columna}' espera VECTOR de dimensión {definition['size']} y llegó {len(valor.values)}")
+        with np.errstate(over="ignore"):
+            vector = np.array(valor.values, dtype=np.float32)
+        if not np.isfinite(vector).all():
+            raise SemanticError(f"el vector de '{columna}' excede el rango de FLOAT")
+        return vector
 
     def _validar_claves(self, tabla, nuevas, anteriores=()):
         claves = [c for c, definition in tabla.column_definitions.items() if definition.get("primary_key")]
@@ -981,6 +1120,16 @@ class Executor(Visitor):
             raise SemanticError("el tamaño de VARCHAR debe ser positivo")
         if node.index_column is not None and tipos[node.index_column] == "POINT":
             raise SemanticError("POINT no admite PRIMARY KEY con índices HASH o BPLUS")
+        columnas_vector = [c.name for c in node.columns if c.type == "VECTOR"]
+        if columnas_vector:
+            if self.data_dir is None:
+                raise SemanticError("las columnas VECTOR solo existen en tablas guardadas en disco")
+            if node.index_kind == "BPLUS_CLUSTERED":
+                raise SemanticError("las columnas VECTOR no admiten tablas BPLUS_CLUSTERED")
+            if node.index_column in columnas_vector:
+                raise SemanticError("VECTOR no admite PRIMARY KEY")
+            if any(c.primary_key for c in node.columns if c.type == "VECTOR"):
+                raise SemanticError("VECTOR no admite PRIMARY KEY")
 
         if self.data_dir is None:
             self.catalog[node.table] = Table(node.table, nombres,
@@ -992,7 +1141,11 @@ class Executor(Visitor):
             return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
 
         schema = []
+        escalares = []
         for c in node.columns:
+            if c.type != "VECTOR":
+                escalares.append(c)
+        for c in escalares:
             if c.type == "INT":
                 schema.append((c.name, "int"))
             elif c.type == "FLOAT":
@@ -1003,13 +1156,13 @@ class Executor(Visitor):
                 schema.append((c.name, "str"))
         campo = node.index_column
         if campo is None:
-            campo = next((c.name for c in node.columns if c.type != "POINT"), None)
+            campo = next((c.name for c in escalares if c.type != "POINT"), None)
         if campo is None:
             raise SemanticError("la tabla necesita una columna escalar para su índice HASH o BPLUS")
         tipo = node.index_kind
         if tipo is None:
             tipo = "HASH"
-        formato = "".join("i" if c.type == "INT" else "f" if c.type == "FLOAT" else "dd" if c.type == "POINT" else str(c.size * 4 if c.size is not None else 32) + "s" for c in node.columns)
+        formato = "".join("i" if c.type == "INT" else "f" if c.type == "FLOAT" else "dd" if c.type == "POINT" else str(c.size * 4 if c.size is not None else 32) + "s" for c in escalares)
         if struct.calcsize(formato + "Qii") > 4080:
             raise SemanticError("el registro es demasiado grande para una página de 4096 bytes")
         tabla = StorageTable(node.table, schema, self.data_dir, campo, tipo, definitions)
@@ -1029,6 +1182,8 @@ class Executor(Visitor):
         tabla = self._tabla(node.table)
         if not isinstance(tabla, StorageTable):
             raise SemanticError("los índices secundarios solo existen en tablas guardadas en disco")
+        if node.kind in ("IVF", "HNSW") or node.column in tabla.almacenes:
+            return self._crear_indice_vectorial(tabla, node)
         columna = self._columna(tabla, node.column)
         if self._tipo_columna(tabla, columna) == "point":
             raise SemanticError(f"la columna POINT '{columna}' ya tiene su R-Tree; CREATE INDEX admite HASH o BPLUS")
@@ -1051,6 +1206,27 @@ class Executor(Visitor):
         self.plan.append(self._paso("Create Index", tipo + "(" + columna + ")", node.name, filas))
         return {"message": f"índice '{indice.nombre}' creado sobre {tabla.name}.{columna} ({descripcion}, {filas} entradas)"}
 
+    def _crear_indice_vectorial(self, tabla, node):
+        if node.column not in tabla.almacenes:
+            raise SemanticError(f"'{node.column}' no es una columna VECTOR de '{tabla.name}'; IVF y HNSW solo indexan columnas VECTOR")
+        if node.kind not in ("IVF", "HNSW"):
+            raise SemanticError(f"la columna VECTOR '{node.column}' solo admite índices IVF o HNSW")
+        existentes = nombres_de_indices(self.catalog)
+        if node.name in existentes:
+            raise SemanticError(f"ya existe un índice llamado '{node.name}' (en '{existentes[node.name]}')")
+        opciones = dict(node.options)
+        metrica = opciones.get("METRIC", COSINE)
+        for indice in tabla.indices_vectoriales.values():
+            if indice.columna == node.column and indice.tipo == node.kind and indice.metrica == metrica:
+                raise SemanticError(f"'{node.column}' ya tiene el índice {node.kind} '{indice.nombre}' con métrica {metrica}")
+        try:
+            indice = tabla.crear_indice_vectorial(node.name, node.column, node.kind, opciones)
+        except ValueError as error:
+            raise SemanticError(str(error)) from error
+        filas = len(indice.almacen)
+        self.plan.append(self._paso("Create Index", node.kind + "(" + node.column + ")", node.name, filas))
+        return {"message": f"índice '{node.name}' creado sobre {tabla.name}.{node.column} ({node.kind}, {metrica}, {filas} entradas)"}
+
     def visit_DropTable(self, node):
         self._bloquear_catalogo(node.table)
         if node.table not in self.catalog:
@@ -1071,6 +1247,10 @@ class Executor(Visitor):
             raise SemanticError(f"el índice '{node.name}' no existe")
         self._bloquear_catalogo(existentes[node.name])
         tabla = self._tabla(existentes[node.name])
+        if node.name in tabla.indices_vectoriales:
+            tabla.eliminar_indice_vectorial(node.name)
+            self.plan.append(self._paso("Drop Index", tabla.name, node.name, 0))
+            return {"message": f"índice '{node.name}' eliminado de '{tabla.name}'"}
         if node.name not in tabla.secundarios:
             raise SemanticError(f"'{node.name}' es un índice propio de la tabla '{tabla.name}' y no se puede eliminar; solo se eliminan índices creados con CREATE INDEX")
         tabla.eliminar_indice(node.name)
@@ -1081,7 +1261,8 @@ class Executor(Visitor):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla, LockMode.PU)
         for columna, _ in node.assignments:
-            self._columna(tabla, columna)
+            if columna not in getattr(tabla, "almacenes", {}):
+                self._columna(tabla, columna)
         hijo = self._acceso(tabla, node.where)
 
         def aplicar(filas):

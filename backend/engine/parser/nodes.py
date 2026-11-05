@@ -30,6 +30,32 @@ class Intersection(Node):
     polygon: Polygon
 
 
+DEFAULT_SCORE_COLUMN = "similarity_score"
+
+
+@dataclass(frozen=True)
+class VectorLiteral(Node):
+    values: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class SimilarTo(Node):
+    query: str | VectorLiteral
+    k: int
+
+
+def contains_similar(condition):
+    if isinstance(condition, SimilarTo):
+        return True
+    if isinstance(condition, (And, Or)):
+        for parte in condition.conditions:
+            if contains_similar(parte):
+                return True
+    if isinstance(condition, Not):
+        return contains_similar(condition.condition)
+    return False
+
+
 def expression_columns(expression):
     if isinstance(expression, Distance):
         return [operand for operand in (expression.left, expression.right) if isinstance(operand, str)]
@@ -99,6 +125,8 @@ def condition_columns(condition):
         return condition_columns(condition.condition)
     if isinstance(condition, Intersection):
         return [condition.column]
+    if isinstance(condition, SimilarTo):
+        return []
     columnas = expression_columns(condition.column)
     if isinstance(getattr(condition, "value", None), ColumnRef):
         columnas.append(condition.value.name)
@@ -117,6 +145,9 @@ class Select(Node):
     joins: List["Join"] = field(default_factory=list)
     projection: Optional[List[str]] = None
     limit: Optional[int] = None
+    index_method: Optional[str] = None
+    search_options: tuple = ()
+    score_column: Optional[str] = None
 
 
 def aggregate_name(function, column):
@@ -175,6 +206,7 @@ class CreateIndex(Node):
     table: str
     column: str
     kind: Optional[str] = None
+    options: tuple = ()
 
 
 @dataclass
