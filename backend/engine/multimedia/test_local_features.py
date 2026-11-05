@@ -119,6 +119,7 @@ def test_mfcc():
     assert ext.dimension == 12
     assert MfccExtractor(include_c0=True).dimension == 13
     assert MfccExtractor(max_seconds=30).descriptor_id.endswith(":dur30")
+    assert MfccExtractor(max_seconds=30.0).descriptor_id == MfccExtractor(max_seconds=30).descriptor_id
 
     with tempfile.TemporaryDirectory() as carpeta:
         carpeta = Path(carpeta)

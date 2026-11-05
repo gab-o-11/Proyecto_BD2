@@ -45,7 +45,7 @@ class MfccExtractor(LocalFeatureExtractor):
     @property
     def descriptor_id(self):
         c0 = "c0" if self.include_c0 else "sinc0"
-        duracion = "" if self.max_seconds is None else f":dur{self.max_seconds}"
+        duracion = "" if self.max_seconds is None else f":dur{self.max_seconds:g}"
         return f"mfcc:sr{self.sr}:n{self.n_mfcc}:fft{self.n_fft}:hop{self.hop_length}:{c0}{duracion}"
 
     @property
