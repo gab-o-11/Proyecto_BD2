@@ -5,6 +5,7 @@ import struct
 
 from engine.storage.heap.heapfile import Heapfile
 from engine.storage.sequential.sequential_file import SequentialFile
+from engine.storage.text.text_store import TextStore
 from engine.hashing import ExtendibleHashIndex
 from engine.bplus import BPlusTree, ClusteredBPlusTree
 from engine.spatial_table import SpatialTable
@@ -17,11 +18,13 @@ PAGE_SIZE = 4096
 BLOCK_FACTOR = 32
 TABLE_SUFFIX = ".tbl"
 STATS_SUFFIX = ".stats"
+TEXT_SUFFIX = ".txt"
 MARCA_SIN_SEMILLA = ".sin_semilla"
 AUTOANALYZE_BASE = 50
 AUTOANALYZE_FACTOR = 0.1
 SUFIJOS_INDICE = (".meta", ".nodes", ".dir", ".buk")
-VACIOS = {"int": 0, "float": 0.0, "point": (0.0, 0.0), "str": b""}
+VACIOS = {"int": 0, "float": 0.0, "point": (0.0, 0.0), "str": b"", "text": (0, 0)}
+DOBLES = ("point", "text")
 
 
 def _borrar_archivos(base):
@@ -81,8 +84,15 @@ class StorageTable(SpatialTable, VectorTable):
                 record_format += "f"
             elif col_type == "point":
                 record_format += "dd"
+            elif col_type == "text":
+                record_format += "QI"
             else:
                 record_format += str(self._string_size(col)) + "s"
+        if index_field in self.columnas_texto():
+            raise ValueError(f"la columna TEXT '{index_field}' no puede ser la columna índice")
+        self.textos = None
+        if self.columnas_texto():
+            self.textos = TextStore(os.path.join(data_dir, name + TEXT_SUFFIX), page_size=PAGE_SIZE)
         self.nulos = nulos
         if nulos:
             record_format += "Q"
@@ -137,7 +147,18 @@ class StorageTable(SpatialTable, VectorTable):
         return self.heap.read_file_header()[1]
 
     def ancho(self):
-        return struct.calcsize(self.record_format)
+        ancho = struct.calcsize(self.record_format)
+        columnas = (self.estadisticas or {}).get("columnas", {})
+        for col in self.columnas_texto():
+            ancho += round(columnas.get(col, {}).get("largo_promedio") or 0)
+        return ancho
+
+    def columnas_texto(self):
+        columnas = []
+        for col, col_type in self.schema:
+            if col_type == "text":
+                columnas.append(col)
+        return columnas
 
     def filas_por_pagina(self):
         if self.is_clustered:
@@ -159,12 +180,18 @@ class StorageTable(SpatialTable, VectorTable):
         for row in self._iter_rows():
             total += 1
             for col, col_type in self.schema:
-                valores[col].append(row[col])
+                valor = row[col]
+                if col_type == "text" and valor is not None:
+                    valor = (hash(valor), row["__texto__"][col][1])
+                valores[col].append(valor)
         columnas = {}
         for col, col_type in self.schema:
             datos = [dato for dato in valores[col] if dato is not None]
             info = {"n_distinct": len(set(datos)), "min": None, "max": None, "nulos": (total - len(datos)) / total if total else 0.0}
-            if datos and col_type == "point":
+            if col_type == "text":
+                largos = [dato[1] for dato in datos]
+                info["largo_promedio"] = sum(largos) / len(largos) if largos else 0.0
+            elif datos and col_type == "point":
                 latitudes = [dato[0] for dato in datos]
                 longitudes = [dato[1] for dato in datos]
                 info["bbox"] = [min(latitudes), min(longitudes), max(latitudes), max(longitudes)]
@@ -221,8 +248,17 @@ class StorageTable(SpatialTable, VectorTable):
         for col, col_type in self.schema:
             if col == field:
                 return offset
-            offset += 2 if col_type == "point" else 1
+            offset += 2 if col_type in DOBLES else 1
         return 0
+
+    def _posiciones_texto(self):
+        posiciones = []
+        offset = 0
+        for col, col_type in self.schema:
+            if col_type == "text":
+                posiciones.append(offset)
+            offset += 2 if col_type in DOBLES else 1
+        return posiciones
 
     def _string_size(self, field):
         size = self.column_definitions.get(field, {}).get("size")
@@ -235,14 +271,22 @@ class StorageTable(SpatialTable, VectorTable):
                     return "int"
                 if col_type == "float":
                     return "float"
+                if col_type == "text":
+                    raise ValueError(f"la columna TEXT '{field}' no admite índices HASH o BPLUS")
                 return "str:" + str(self._string_size(field))
         return "int"
 
-    def _to_tuple(self, row):
+    def _to_tuple(self, row, anterior=None):
         values = []
         mascara = 0
         for posicion, (col, col_type) in enumerate(self.schema):
             value = row[col]
+            if col_type == "text" and anterior is not None:
+                if anterior[col] == value and anterior[col] is not None:
+                    values.extend(anterior["__texto__"][col])
+                    continue
+                if anterior[col] is not None:
+                    self.textos.marcar_basura(anterior["__texto__"][col][1])
             if value is None:
                 if col == self.index_field:
                     raise ValueError(f"la columna índice '{col}' no admite NULL")
@@ -250,7 +294,7 @@ class StorageTable(SpatialTable, VectorTable):
                     raise ValueError(f"la tabla '{self.name}' se creó sin soporte para NULL")
                 mascara |= 1 << posicion
                 value = VACIOS[col_type]
-                if col_type == "point":
+                if col_type in DOBLES:
                     values.extend(value)
                 else:
                     values.append(value)
@@ -261,6 +305,8 @@ class StorageTable(SpatialTable, VectorTable):
                 values.append(float(value))
             elif col_type == "point":
                 values.extend(value)
+            elif col_type == "text":
+                values.extend(self.textos.agregar(str(value)))
             else:
                 values.append(str(value).encode()[:self._string_size(col)])
         if self.nulos:
@@ -271,17 +317,24 @@ class StorageTable(SpatialTable, VectorTable):
         row = {}
         offset = 0
         mascara = data[-1] if self.nulos else 0
+        referencias = {}
         for posicion, (col, col_type) in enumerate(self.schema):
+            nulo = mascara >> posicion & 1
             value = data[offset]
             if col_type == "point":
                 value = tuple(data[offset:offset + 2])
             if col_type == "str":
                 value = value.rstrip(b"\x00").decode()
-            if mascara >> posicion & 1:
+            if col_type == "text":
+                referencias[col] = (data[offset], data[offset + 1])
+                value = None if nulo else self.textos.leer(*referencias[col])
+            if nulo:
                 value = None
             row[col] = value
-            offset += 2 if col_type == "point" else 1
+            offset += 2 if col_type in DOBLES else 1
         row["__rid__"] = pair
+        if referencias:
+            row["__texto__"] = referencias
         return row
 
     def _iter_rows(self):
@@ -289,6 +342,10 @@ class StorageTable(SpatialTable, VectorTable):
             for position, fields in self.seq._ordered_with_pos():
                 yield self._to_dict(position, fields)
             return
+        for pair, data in self._registros_heap():
+            yield self._to_dict(pair, data)
+
+    def _registros_heap(self):
         page_size, total_pages, total_records, first_id = self.heap.read_file_header()
         for page_id in range(1, total_pages + 1):
             page_id_leido, num_reg, reg_act, free_list = self.heap.read_page_header(page_id)
@@ -296,7 +353,7 @@ class StorageTable(SpatialTable, VectorTable):
                 data = heap_fetch(self.heap, (page_id, slot_id))
                 if data is None:
                     continue
-                yield self._to_dict((page_id, slot_id), data)
+                yield (page_id, slot_id), data
 
     def insert(self, row):
         values = self._to_tuple(row)
@@ -481,6 +538,8 @@ class StorageTable(SpatialTable, VectorTable):
         bases.extend(indice.ruta for indice in self.secundarios.values())
         for base in bases:
             _borrar_archivos(base)
+        if self.textos is not None:
+            self.textos.destruir()
 
     def _ruta_rtree(self, column):
         return os.path.join(self.data_dir, self.name + "_" + column + "_rtree")
@@ -557,10 +616,12 @@ class StorageTable(SpatialTable, VectorTable):
                     self._spatial_remove(row)
                     self._secundarios_borrar(row, (row["__rid__"], 0))
                 if self.index.delete(row[self.index_field]):
+                    self._textos_a_basura(row)
                     count += 1
             if self.seq.reorganizations != reorganizaciones:
                 self.reconstruir_indices_espaciales()
                 self.reconstruir_secundarios()
+            self._compactar_textos()
             return count
         for row in rows:
             pair = row.get("__rid__")
@@ -571,8 +632,40 @@ class StorageTable(SpatialTable, VectorTable):
             self.heap.delete(to_heap_rid(pair))
             self.index.delete(row[self.index_field], pair)
             self._secundarios_borrar(row, pair)
+            self._textos_a_basura(row)
             count += 1
+        self._compactar_textos()
         return count
+
+    def _textos_a_basura(self, row):
+        for col, (offset, longitud) in row.get("__texto__", {}).items():
+            if row[col] is not None:
+                self.textos.marcar_basura(longitud)
+
+    def _compactar_textos(self):
+        if self.textos is None or not self.textos.requiere_compactar():
+            return False
+        posiciones = self._posiciones_texto()
+        if self.is_clustered:
+            registros = self.seq._ordered_with_pos()
+        else:
+            registros = list(self._registros_heap())
+        referencias = []
+        for lugar, campos in registros:
+            for posicion in posiciones:
+                referencias.append((campos[posicion], campos[posicion + 1]))
+        nuevas = self.textos.compactar(referencias)
+        for lugar, campos in registros:
+            valores = list(campos)
+            for posicion in posiciones:
+                if valores[posicion + 1] > 0:
+                    valores[posicion] = nuevas[valores[posicion]]
+            if self.is_clustered:
+                slot = self.seq.read_record(lugar)
+                self.seq.write_record(lugar, tuple(valores) + tuple(slot[-2:]))
+            else:
+                self.heap.update(to_heap_rid(lugar), tuple(valores))
+        return True
 
     def update_rows(self, rows, assignments):
         total = 0
@@ -583,7 +676,11 @@ class StorageTable(SpatialTable, VectorTable):
                 self._spatial_remove(row)
             for columna, valor in assignments:
                 row[columna] = valor
-            values = tuple(self._to_tuple(row))
+            values = tuple(self._to_tuple(row, anterior if "__texto__" in anterior else None))
+            if "__texto__" in anterior:
+                row["__texto__"] = {}
+                for col, posicion in zip(self.columnas_texto(), self._posiciones_texto()):
+                    row["__texto__"][col] = (values[posicion], values[posicion + 1])
             if self.is_clustered:
                 self.seq.update(vieja, values)
                 if row[self.index_field] != vieja:
@@ -607,6 +704,7 @@ class StorageTable(SpatialTable, VectorTable):
             self.reconstruir_indices_espaciales()
         if self.is_clustered:
             self.reconstruir_secundarios()
+        self._compactar_textos()
         return total
 
     def count(self):
