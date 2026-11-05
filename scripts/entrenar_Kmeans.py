@@ -161,30 +161,22 @@ def make_extractor(args):
             return extractor.extract(path).values
 
     elif args.tipo == "audio":
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
         try:
             import librosa
         except ImportError as error:
-            raise ValueError('instala audio: python -m pip install "librosa==0.11.0"') from error
-        config = {"extractor": "mfcc", "librosa": librosa.__version__,
-                  "sample_rate": args.sr, "mono": True, "offset": 0,
-                  "duration": args.segundos, "res_type": "soxr_hq",
-                  "n_mfcc": args.mfcc, "n_fft": 2048, "hop_length": 512,
-                  "n_mels": 128, "dct_type": 2, "norm": "ortho", "lifter": 0,
-                  "mel_norm": "slaney", "fmin": 0.0, "fmax": args.sr / 2,
-                  "htk": False, "center": True, "pad_mode": "constant", "power": 2.0}
+            raise ValueError('instala audio: python -m pip install "librosa>=0.10.2"') from error
+        from engine.multimedia.audio_features import MfccExtractor
+        if args.normalizacion not in ("auto", "none"):
+            raise ValueError("el extractor MFCC del gestor usa coeficientes sin normalizacion adicional")
+        extractor = MfccExtractor(sr=args.sr, n_mfcc=args.mfcc, max_seconds=args.segundos)
+        config = {"extractor": "mfcc", "descriptor_id": extractor.descriptor_id,
+                  "librosa": librosa.__version__, "sample_rate": args.sr,
+                  "n_mfcc": args.mfcc, "include_c0": False, "n_fft": 2048,
+                  "hop_length": 512, "max_seconds": args.segundos, "normalization": "none"}
 
         def extract(path):
-            signal, sr = librosa.load(str(path), sr=args.sr, mono=True,
-                                      offset=0, duration=args.segundos,
-                                      res_type="soxr_hq")
-            if not signal.size or not np.any(signal):
-                raise ValueError("audio vacío o completamente silencioso")
-            return librosa.feature.mfcc(
-                y=signal, sr=sr, n_mfcc=args.mfcc, n_fft=2048, hop_length=512,
-                n_mels=128, dct_type=2, norm="ortho", lifter=0, mel_norm="slaney",
-                fmin=0.0, fmax=sr / 2, htk=False, center=True,
-                pad_mode="constant", power=2.0,
-            ).T
+            return extractor.extract(path).values
     else:
         if not args.descriptor_id:
             raise ValueError("--tipo descriptores requiere --descriptor-id (extractor y versión)")
@@ -472,7 +464,7 @@ def parser():
     command.add_argument("--max-lado", type=int, default=512, help="lado máximo de imagen al extraer SIFT")
     command.add_argument("--segundos", type=float, default=30, help="primeros segundos de cada audio")
     command.add_argument("--sr", type=int, default=22050)
-    command.add_argument("--mfcc", type=int, default=20)
+    command.add_argument("--mfcc", type=int, default=13)
     command.add_argument("--normalizacion", choices=["auto", "l2", "none"], default="auto")
     command.add_argument("--descriptor-id", help="extractor y configuración de los .npy externos")
     command.add_argument("--reanudar", action="store_true")
