@@ -6,7 +6,7 @@ import numpy as np
 
 from .kmeans import kmeans
 from ..multimedia.extract_features import ColeccionesMultimedia
-from ..multimedia.local_features import DescriptorBatch, LocalFeatureExtractor
+from ..multimedia.local_features import DescriptorBatch, LocalFeatureExtractor, SiftExtractor
 from ..parser.executor import Executor
 from ..parser.scanner import Scanner
 from ..parser.sql_parser import Parser
@@ -14,25 +14,6 @@ from ..parser.sql_parser import Parser
 PALABRAS = 48
 CLASES = ("tablero", "circulos", "lineas")
 IMAGENES_POR_CLASE = 8
-
-
-class ExtractorSift(LocalFeatureExtractor):
-    @property
-    def descriptor_id(self):
-        return "sift-prueba"
-
-    @property
-    def dimension(self):
-        return 128
-
-    def extract(self, path):
-        imagen = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
-        if imagen is None:
-            raise ValueError(f"no se pudo leer la imagen '{path}'")
-        _, descriptores = cv2.SIFT_create(nfeatures=200).detectAndCompute(imagen, None)
-        if descriptores is None:
-            descriptores = np.empty((0, 128), dtype=np.float32)
-        return DescriptorBatch(self.descriptor_id, 128, descriptores, source=str(path))
 
 
 class ExtractorAudio(LocalFeatureExtractor):
@@ -115,7 +96,7 @@ def _plan(executor, sql):
 
 def _imagen_completa(media, datos):
     nombres = _imagenes(media)
-    extractor = ExtractorSift()
+    extractor = SiftExtractor()
     centroides = _vocabulario(extractor, media, nombres, PALABRAS)
     colecciones = ColeccionesMultimedia(media)
     colecciones.registrar(extractor, centroides)
@@ -123,7 +104,7 @@ def _imagen_completa(media, datos):
     executor = Executor(catalogo, data_dir=datos, vectorizador=colecciones.vectorizar)
     _ejecutar(executor, f"CREATE TABLE imagenes (id INT PRIMARY KEY, ruta VARCHAR(40), embedding VECTOR({PALABRAS}));")
     _insertar(executor, "imagenes", nombres)
-    assert colecciones.cargar(catalogo["imagenes"], "ruta", "sift-prueba") == len(nombres)
+    assert colecciones.cargar(catalogo["imagenes"], "ruta", extractor.descriptor_id) == len(nombres)
     _ejecutar(executor, "CREATE INDEX idx_ivf ON imagenes (embedding) USING IVF WITH (METRIC=cosine, LISTS=4);")
     _ejecutar(executor, "CREATE INDEX idx_hnsw ON imagenes (embedding) USING HNSW WITH (METRIC=cosine, M=8);")
 
