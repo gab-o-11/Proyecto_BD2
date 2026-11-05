@@ -8,6 +8,7 @@ from engine.storage.sequential.sequential_file import SequentialFile
 from engine.hashing import ExtendibleHashIndex
 from engine.bplus import BPlusTree, ClusteredBPlusTree
 from engine.spatial_table import SpatialTable
+from engine.vector_table import VectorTable
 from engine.common import as_pair
 from engine.common.heap_adapter import heap_fetch, to_heap_rid
 
@@ -56,7 +57,7 @@ class IndiceSecundario:
         return {"name": self.nombre, "column": self.columna, "kind": self.tipo}
 
 
-class StorageTable(SpatialTable):
+class StorageTable(SpatialTable, VectorTable):
     def __init__(self, name, schema, data_dir, index_field, index_kind, column_definitions=None, secundarios=None, nulos=True):
         self.name = name
         self._init_spatial()
@@ -113,6 +114,7 @@ class StorageTable(SpatialTable):
             self.secundarios[indice.nombre] = indice
         self._write_descriptor()
         self._abrir_indices_espaciales([col for col, col_type in schema if col_type == "point"])
+        self._init_vectorial()
 
     def _leer_estadisticas(self):
         if not os.path.exists(self.stats_path):
@@ -312,6 +314,7 @@ class StorageTable(SpatialTable):
         self.index.insert(row[self.index_field], pair)
         self._spatial_insert(dict(row, __rid__=pair))
         self._secundarios_insertar(row, pair)
+        self._vector_insert(row, pair)
 
     def _rid_secundario(self, row):
         if self.is_clustered:
@@ -398,6 +401,7 @@ class StorageTable(SpatialTable):
             for row in rows:
                 rid = self.heap.insert(*self._to_tuple(row))
                 pairs.append((row[self.index_field], as_pair(rid)))
+                self._vector_insert(row, as_pair(rid))
             self.index.bulk_load(pairs)
         self.reconstruir_indices_espaciales()
         self.reconstruir_secundarios()
@@ -464,9 +468,11 @@ class StorageTable(SpatialTable):
             arbol.close()
         for indice in self.secundarios.values():
             indice.cerrar()
+        self._cerrar_vectorial()
 
     def destruir(self):
         self.cerrar()
+        self._destruir_vectorial()
         bases = [os.path.join(self.data_dir, self.name + TABLE_SUFFIX), self.stats_path,
                  os.path.join(self.data_dir, self.name + ".seq" if self.is_clustered else self.name + ".dat"),
                  os.path.join(self.data_dir, self.name + "_" + self.index_field)]
@@ -560,6 +566,7 @@ class StorageTable(SpatialTable):
             if pair is None:
                 continue
             self._spatial_remove(row)
+            self._vector_remove(row)
             self.heap.delete(to_heap_rid(pair))
             self.index.delete(row[self.index_field], pair)
             self._secundarios_borrar(row, pair)
@@ -586,6 +593,7 @@ class StorageTable(SpatialTable):
                     self.index.delete(vieja, row["__rid__"])
                     self.index.insert(row[self.index_field], row["__rid__"])
                 self._spatial_insert(row)
+                self._vector_update(row, assignments)
                 for indice in self.secundarios.values():
                     if anterior[indice.columna] == row[indice.columna]:
                         continue
@@ -723,6 +731,8 @@ def table_info(tabla):
     columns = []
     for col, col_type in tabla.schema:
         columns.append({"name": col, "type": col_type})
+    for col in tabla.almacenes:
+        columns.append({"name": col, "type": "vector"})
     kind = str(tabla.index_kind).upper()
     indexes = [{"field": tabla.index_field, "type": kind, "name": tabla.nombre_indice_principal(), "primary": True}]
     indexes.extend({"field": col, "type": "RTREE", "name": tabla.name + "_" + col + "_rtree", "primary": False} for col, typ in tabla.schema if typ == "point")

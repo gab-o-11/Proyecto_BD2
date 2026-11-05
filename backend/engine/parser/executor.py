@@ -4,7 +4,7 @@ import re
 import struct
 import time
 from .visitor import PrintVisitor, Visitor
-from .nodes import And, Between, ColumnRef, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, aggregate_name, condition_columns, expression_columns
+from .nodes import And, Between, ColumnRef, Compare, Distance, IsNull, Like, Not, Or, Point, Intersection, VectorLiteral, aggregate_name, condition_columns, expression_columns
 from ..catalog import StorageTable, nombres_de_indices
 from ..transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from ..plan import Predicado, Rango, base_de, planner, reporte
@@ -15,6 +15,7 @@ from ..spatial import distance, point
 from ..spatial_table import SpatialTable
 from ..rtree import contains_point, validate_polygon
 from dataclasses import replace
+import numpy as np
 from datetime import date
 
 
@@ -191,9 +192,12 @@ class Executor(Visitor):
     def _plan_insert(self, node):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla, LockMode.PX)
-        columnas = list(tabla.columns)
+        almacenes = getattr(tabla, "almacenes", {})
+        columnas = tabla.columnas_declaradas() if almacenes else list(tabla.columns)
         if node.columns is not None:
-            columnas = [self._columna(tabla, c) for c in node.columns]
+            columnas = []
+            for c in node.columns:
+                columnas.append(c if c in almacenes else self._columna(tabla, c))
             if len(columnas) != len(set(columnas)):
                 raise SemanticError("hay columnas repetidas en INSERT")
         filas = []
@@ -204,6 +208,8 @@ class Executor(Visitor):
                     f"({', '.join(columnas)}) y se dieron {len(valores)}"
                 )
             fila = {c: None for c in tabla.columns}
+            for c in almacenes:
+                fila[c] = None
             fila.update(zip(columnas, valores))
             filas.append(self._validar_fila(tabla, fila))
         self._validar_claves(tabla, filas)
@@ -855,6 +861,8 @@ class Executor(Visitor):
         return "str"
 
     def _convertir(self, tabla, columna, valor):
+        if isinstance(valor, VectorLiteral):
+            raise SemanticError(f"la columna '{columna}' no es de tipo VECTOR")
         tipo = self._tipo_columna(tabla, columna)
         if tipo == "point":
             try:
@@ -913,7 +921,28 @@ class Executor(Visitor):
                 if isinstance(tabla, StorageTable) and len(valor.encode()) > tabla._string_size(columna):
                     raise SemanticError(f"el valor de '{columna}' excede el espacio de almacenamiento")
             salida[columna] = valor
+        for columna in getattr(tabla, "almacenes", {}):
+            if columna in salida:
+                salida[columna] = self._vector_de_fila(tabla, columna, salida[columna])
         return salida
+
+    def _vector_de_fila(self, tabla, columna, valor):
+        definition = tabla.column_definitions[columna]
+        if valor is None:
+            if definition.get("not_null"):
+                raise SemanticError(f"la columna '{columna}' no admite NULL")
+            return None
+        if isinstance(valor, np.ndarray):
+            return valor
+        if not isinstance(valor, VectorLiteral):
+            raise SemanticError(f"la columna VECTOR '{columna}' requiere VECTOR(...)")
+        if len(valor.values) != definition["size"]:
+            raise SemanticError(f"la columna '{columna}' espera VECTOR de dimensión {definition['size']} y llegó {len(valor.values)}")
+        with np.errstate(over="ignore"):
+            vector = np.array(valor.values, dtype=np.float32)
+        if not np.isfinite(vector).all():
+            raise SemanticError(f"el vector de '{columna}' excede el rango de FLOAT")
+        return vector
 
     def _validar_claves(self, tabla, nuevas, anteriores=()):
         claves = [c for c, definition in tabla.column_definitions.items() if definition.get("primary_key")]
@@ -981,6 +1010,16 @@ class Executor(Visitor):
             raise SemanticError("el tamaño de VARCHAR debe ser positivo")
         if node.index_column is not None and tipos[node.index_column] == "POINT":
             raise SemanticError("POINT no admite PRIMARY KEY con índices HASH o BPLUS")
+        columnas_vector = [c.name for c in node.columns if c.type == "VECTOR"]
+        if columnas_vector:
+            if self.data_dir is None:
+                raise SemanticError("las columnas VECTOR solo existen en tablas guardadas en disco")
+            if node.index_kind == "BPLUS_CLUSTERED":
+                raise SemanticError("las columnas VECTOR no admiten tablas BPLUS_CLUSTERED")
+            if node.index_column in columnas_vector:
+                raise SemanticError("VECTOR no admite PRIMARY KEY")
+            if any(c.primary_key for c in node.columns if c.type == "VECTOR"):
+                raise SemanticError("VECTOR no admite PRIMARY KEY")
 
         if self.data_dir is None:
             self.catalog[node.table] = Table(node.table, nombres,
@@ -992,7 +1031,11 @@ class Executor(Visitor):
             return {"message": f"tabla '{node.table}' creada con {len(nombres)} columnas"}
 
         schema = []
+        escalares = []
         for c in node.columns:
+            if c.type != "VECTOR":
+                escalares.append(c)
+        for c in escalares:
             if c.type == "INT":
                 schema.append((c.name, "int"))
             elif c.type == "FLOAT":
@@ -1003,13 +1046,13 @@ class Executor(Visitor):
                 schema.append((c.name, "str"))
         campo = node.index_column
         if campo is None:
-            campo = next((c.name for c in node.columns if c.type != "POINT"), None)
+            campo = next((c.name for c in escalares if c.type != "POINT"), None)
         if campo is None:
             raise SemanticError("la tabla necesita una columna escalar para su índice HASH o BPLUS")
         tipo = node.index_kind
         if tipo is None:
             tipo = "HASH"
-        formato = "".join("i" if c.type == "INT" else "f" if c.type == "FLOAT" else "dd" if c.type == "POINT" else str(c.size * 4 if c.size is not None else 32) + "s" for c in node.columns)
+        formato = "".join("i" if c.type == "INT" else "f" if c.type == "FLOAT" else "dd" if c.type == "POINT" else str(c.size * 4 if c.size is not None else 32) + "s" for c in escalares)
         if struct.calcsize(formato + "Qii") > 4080:
             raise SemanticError("el registro es demasiado grande para una página de 4096 bytes")
         tabla = StorageTable(node.table, schema, self.data_dir, campo, tipo, definitions)
@@ -1081,7 +1124,8 @@ class Executor(Visitor):
         tabla = self._tabla(node.table)
         self._bloquear_tabla(tabla, LockMode.PU)
         for columna, _ in node.assignments:
-            self._columna(tabla, columna)
+            if columna not in getattr(tabla, "almacenes", {}):
+                self._columna(tabla, columna)
         hijo = self._acceso(tabla, node.where)
 
         def aplicar(filas):
