@@ -257,7 +257,7 @@ def main():
     _ivf_mantenimiento()
     _hnsw()
     _hnsw_mantenimiento()
-    print("OK: métricas, búsqueda exacta, almacén de vectores, IVF y HNSW")
+    print("OK: métricas, búsqueda exacta, almacén de vectores, IVF, mantenimiento de IVF, HNSW, mantenimiento de HNSW")
 
 
 if __name__ == "__main__":
