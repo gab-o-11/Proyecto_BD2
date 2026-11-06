@@ -23,7 +23,7 @@ produzcan histogramas de 256 componentes.
 
 - `BD2_MODELS_DIR`: carpeta de vocabularios; por defecto `data/modelos` del proyecto.
 - `BD2_MULTIMEDIA_DIR`: carpeta que contiene los archivos consultables; por defecto
-  `data/datasets` del proyecto. Las rutas de las filas y consultas son relativas a ella.
+  `data/multimedia` del proyecto. Las rutas de las filas y consultas son relativas a ella.
 - `BD2_DATA_DIR`: catalogo y almacenamiento; por defecto `data/runtime`.
 
 El inicio carga `fotos/vocabulary.json` y `audio_msd/vocabulary.json`. Un vocabulario
@@ -69,7 +69,7 @@ WHERE SIMILAR_TO('imagenes/101_ObjectCategories/accordion/image_0001.jpg', k=2)
 USING HNSW WITH METRIC=cosine ORDER BY score DESC;
 ```
 
-Para audio, crea otra tabla VECTOR(256), inserta rutas como
+Para audio, crea otra tabla VECTOR(256), inserta rutas relativas a `data/multimedia` como
 `audio/MillionSongSubset/A/A/A/TRAAAAW128F429D538.h5` y carga sus caracteristicas con
 `descriptor_id` igual a `msd:segments_timbre:12:raw:v1`. Puedes crear IVF con
 `CREATE INDEX idx_audio ON audios (v) USING IVF WITH (METRIC=cosine, LISTS=1);`
@@ -98,7 +98,7 @@ de los vocabularios. No requiere descargar los datasets completos ni reentrenar.
 ## Audio real (MP3/WAV) con MFCC
 
 El vocabulario `audio_mfcc` es independiente del timbre de los HDF5 de Million Song.
-Para FMA Small, extrae los MP3 en `data/datasets/audio/fma_small/`. Las carpetas
+Para FMA Small, extrae los MP3 en `data/multimedia/audio/fma_small/` (la misma carpeta sirve para entrenar y para consultar). Las carpetas
 vacias no bastan: el lanzador comprobara que hay MP3 antes de entrenar.
 
 ```powershell
@@ -115,7 +115,7 @@ extractor con la configuracion exacta de `training.json`: por defecto 22050 Hz,
 ni TF-IDF al consultar.
 
 Despues de reiniciar la API, consulta `/api/multimedia/models` para obtener su
-`descriptor_id`; crea una tabla VECTOR(256), inserta rutas como
+`descriptor_id`; crea una tabla VECTOR(256), inserta rutas relativas a `data/multimedia` como
 `audio/fma_small/000/000002.mp3`, y llama al endpoint de features con ese
 identificador. Ajusta TF-IDF e indices por coleccion, como para las otras modalidades.
 No reutilices el vocabulario `audio_msd` para estos MP3.

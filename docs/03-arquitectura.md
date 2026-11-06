@@ -52,7 +52,7 @@ La extraccion y TF-IDF reutilizan `extract_features.py`, y la cuantizacion reuti
 `POST /api/tables/{nombre}/features` prepara los vectores y TF-IDF de cada tabla.
 En una consulta `SIMILAR_TO`, el ejecutor utiliza el mismo pipeline para producir
 el vector de consulta y buscarlo en el indice. Las rutas se resuelven dentro de
-`BD2_MULTIMEDIA_DIR` (por defecto `data/datasets`). Los vocabularios se buscan en
+`BD2_MULTIMEDIA_DIR` (por defecto `data/multimedia`). Los vocabularios se buscan en
 `BD2_MODELS_DIR` (por defecto `data/modelos`).
 
 La configuracion y los ejemplos completos estan en [Pipeline multimedia](13-multimedia.md).

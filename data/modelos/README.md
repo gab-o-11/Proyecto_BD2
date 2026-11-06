@@ -61,11 +61,11 @@ Para usar tambien el vocabulario MFCC, utiliza el ensamblaje del motor:
 
 ```python
 from engine.multimedia.pipeline import FeaturePipeline
-pipeline = FeaturePipeline("data/datasets", "data/modelos")
+pipeline = FeaturePipeline("data/multimedia", "data/modelos")
 print(pipeline.modelos())
 ```
 
-Las rutas de MP3 en las tablas son relativas a `data/datasets`, por ejemplo
+Las rutas de MP3 en las tablas son relativas a `data/multimedia` (`BD2_MULTIMEDIA_DIR`), por ejemplo
 `audio/fma_small/000/000002.mp3`. Cada tabla debe ajustar y guardar su TF-IDF antes
 de consultar. El vector final tiene 256 componentes; no debe mezclarse con los
 vectores de otra modalidad aunque tenga la misma dimension.

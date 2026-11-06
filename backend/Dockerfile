@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r backend/requirements.txt
 
 COPY backend backend
 COPY data/generar_demo.py data/generar_demo.py
+COPY data/modelos data/modelos
 COPY backend/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
