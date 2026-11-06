@@ -5,7 +5,7 @@ import struct
 import time
 from .visitor import PrintVisitor, Visitor
 from .nodes import DEFAULT_SCORE_COLUMN, DEFAULT_TEXT_SCORE_COLUMN, And, Between, ColumnRef, Compare, Distance, IsNull, Like, Match, Not, Or, Point, Intersection, SimilarTo, VectorLiteral, aggregate_name, condition_columns, contains_match, contains_similar, expression_columns
-from ..catalog import StorageTable, nombres_de_indices
+from ..catalog import FLOAT_MAX, StorageTable, nombres_de_indices, tabla_que_choca
 from ..transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from ..plan import Predicado, Rango, base_de, planner, reporte
 from ..plan import costos
@@ -750,6 +750,9 @@ class Executor(Visitor):
     def _valor_comparable(self, tabla, columna, valor):
         if valor is None:
             raise SemanticError("una comparación con NULL nunca es verdadera; usa IS NULL o IS NOT NULL")
+        # comparar un INT con 25.5 o 2**31 es válido aunque ese valor no se pueda guardar
+        if self._tipo_columna(tabla, columna) == "int" and (isinstance(valor, int) or isinstance(valor, float) and math.isfinite(valor)):
+            return valor
         return self._convertir(tabla, columna, valor)
 
     def _expresion_condicion(self, tabla, expresion):
@@ -1080,6 +1083,8 @@ class Executor(Visitor):
                     raise SemanticError(f"la tabla '{tabla.name}' se creó sin soporte para NULL")
                 continue
             valor = self._convertir(tabla, columna, valor)
+            if isinstance(valor, float) and not abs(valor) <= FLOAT_MAX:
+                raise SemanticError(f"el valor de '{columna}' excede el rango de FLOAT")
             tipo = tabla.column_types.get(columna)
             if tipo == "DATE":
                 try:
@@ -1118,23 +1123,25 @@ class Executor(Visitor):
         return vector
 
     def _validar_claves(self, tabla, nuevas, anteriores=()):
-        claves = [c for c, definition in tabla.column_definitions.items() if definition.get("primary_key")]
-        if not claves:
-            return
-        clave = claves[0]
-        if not anteriores and tabla.index_column == clave:
-            vistas = set()
+        primarias = [c for c, definition in tabla.column_definitions.items() if definition.get("primary_key")]
+        claves = {c: "PRIMARY KEY" for c in primarias[:1]}
+        if getattr(tabla, "is_clustered", False):
+            # el secuencial borra y actualiza buscando por clave: con repetidas tocaría otra fila
+            claves.setdefault(tabla.index_field, "clave del índice agrupado")
+        for clave, etiqueta in claves.items():
+            if not anteriores and tabla.index_column == clave:
+                vistas = set()
+                for fila in nuevas:
+                    if fila[clave] in vistas or tabla.search(clave, fila[clave]):
+                        raise SemanticError(f"{etiqueta} duplicada: {clave} = {fila[clave]}")
+                    vistas.add(fila[clave])
+                continue
+            reemplazadas = {fila[clave] for fila in anteriores}
+            existentes = {fila[clave] for fila in tabla.scan() if fila[clave] not in reemplazadas}
             for fila in nuevas:
-                if fila[clave] in vistas or tabla.search(clave, fila[clave]):
-                    raise SemanticError(f"PRIMARY KEY duplicada: {clave} = {fila[clave]}")
-                vistas.add(fila[clave])
-            return
-        reemplazadas = {fila[clave] for fila in anteriores}
-        existentes = {fila[clave] for fila in tabla.scan() if fila[clave] not in reemplazadas}
-        for fila in nuevas:
-            if fila[clave] in existentes:
-                raise SemanticError(f"PRIMARY KEY duplicada: {clave} = {fila[clave]}")
-            existentes.add(fila[clave])
+                if fila[clave] in existentes:
+                    raise SemanticError(f"{etiqueta} duplicada: {clave} = {fila[clave]}")
+                existentes.add(fila[clave])
 
     def visit_Compare(self, node):
         raise SemanticError("las condiciones se evalúan dentro del planificador")
@@ -1174,6 +1181,8 @@ class Executor(Visitor):
         self._bloquear_catalogo(node.table)
         if node.table in self.catalog:
             raise SemanticError(f"la tabla '{node.table}' ya existe")
+        if self.data_dir is not None and (otra := tabla_que_choca(self.catalog, node.table)):
+            raise SemanticError(f"el nombre '{node.table}' choca con la tabla '{otra}': sus archivos se mezclarían; usa otro nombre")
         nombres = [c.name for c in node.columns]
         if len(nombres) != len(set(nombres)):
             raise SemanticError("hay columnas repetidas")
@@ -1358,11 +1367,11 @@ class Executor(Visitor):
             nuevas = [self._validar_fila(tabla, dict(fila, **dict(node.assignments))) for fila in filas]
             self._validar_claves(tabla, nuevas, filas)
             if isinstance(tabla, StorageTable):
-                total = 0
-                for fila, nueva in zip(filas, nuevas):
-                    asignaciones = [(columna, nueva[columna]) for columna, _ in node.assignments]
-                    total += tabla.update_rows([fila], asignaciones)
-                return total
+                if not filas:
+                    return 0
+                # SET solo admite constantes: el valor validado es el mismo para todas las filas
+                asignaciones = [(columna, nuevas[0][columna]) for columna, _ in node.assignments]
+                return tabla.update_rows(filas, asignaciones)
             for fila, nueva in zip(filas, nuevas):
                 tabla._spatial_remove(fila)
                 fila.update(nueva)

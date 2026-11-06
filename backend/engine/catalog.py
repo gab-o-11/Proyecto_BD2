@@ -15,6 +15,7 @@ from engine.common import as_pair
 from engine.common.heap_adapter import heap_fetch, to_heap_rid
 
 STRLEN = 32
+FLOAT_MAX = 3.4028234663852886e38  # FLOAT se guarda en 4 bytes; más allá queda como infinito y rompe el JSON
 PAGE_SIZE = 4096
 BLOCK_FACTOR = 32
 TABLE_SUFFIX = ".tbl"
@@ -580,11 +581,6 @@ class StorageTable(SpatialTable, VectorTable, TextIndexTable):
             result.append(self._to_dict(pair, data))
         return result
 
-    def search_range(self, op, value):
-        if op in (">", ">="):
-            return self.buscar_rango(value, None, op == ">=", True)
-        return self.buscar_rango(None, value, True, op == "<=")
-
     def buscar_rango(self, bajo, alto, incluye_bajo=True, incluye_alto=True):
         if self.index_kind == "HASH":
             return None
@@ -708,10 +704,14 @@ class StorageTable(SpatialTable, VectorTable, TextIndexTable):
                     if row[indice.columna] is not None:
                         indice.estructura.insert(row[indice.columna], row["__rid__"])
             total = total + 1
-        if self.is_clustered and self.spatial_indexes:
-            self.reconstruir_indices_espaciales()
         if self.is_clustered:
-            self.reconstruir_secundarios()
+            columnas = {columna for columna, _ in assignments}
+            # sin cambiar la clave, el secuencial reescribe en su sitio y las posiciones no se mueven
+            movidas = self.index_field in columnas
+            if movidas or columnas & set(self.spatial_indexes):
+                self.reconstruir_indices_espaciales()
+            if movidas or columnas & {indice.columna for indice in self.secundarios.values()}:
+                self.reconstruir_secundarios()
         self._compactar_textos()
         return total
 
@@ -855,9 +855,17 @@ def table_info(tabla):
         "name": tabla.name,
         "columns": columns,
         "indexes": indexes,
-        "rows": tabla.count(),
+        "rows": tabla.filas_totales(),
         "storage": storage,
     }
+
+
+def tabla_que_choca(catalogo, nombre):
+    # los archivos de una tabla empiezan con "<nombre>_": 'a' (clave b_c) y 'a_b' (clave c) compartirían 'a_b_c'
+    for otra in catalogo:
+        if otra.startswith(nombre + "_") or nombre.startswith(otra + "_"):
+            return otra
+    return None
 
 
 def nombres_de_indices(catalogo):

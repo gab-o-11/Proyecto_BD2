@@ -1,11 +1,14 @@
 """Regresiones SQL: python -m engine.parser.test_sql (desde backend/)."""
 
 import importlib
+import io
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from tempfile import TemporaryDirectory
 from threading import Event
 from unittest.mock import patch
+
+from fastapi import UploadFile
 
 from .executor import Executor, Table
 from .nodes import Insert
@@ -14,6 +17,7 @@ from .sql_parser import ParseError, Parser
 from .testing import IDA_Y_VUELTA, INVALIDAS
 from .visitor import PrintVisitor
 from ..catalog import _load_tables
+from ..importer import CSVImportError, parse_csv
 from ..transactions import LockMode, Resource, TransactionManager
 
 
@@ -160,7 +164,7 @@ def main():
         finally:
             manager.end()
         pendiente.result(timeout=2)
-    assert not manager.transactions and not manager.lock_manager.owners
+    assert not manager.transactions and not manager.lock_manager._locks
 
     with patch("engine.catalog.create_catalog", return_value={}):
         api = importlib.import_module("api.main")
@@ -177,6 +181,60 @@ def main():
         assert "error" in api.query(api.QueryBody(sql="SELECT * FROM t ORDER BY noexiste"))
         assert "error" not in api.query(api.QueryBody(sql="DELETE FROM t WHERE id = 1; ANALYZE t;"))
         assert not api.transaction_manager.transactions
+        csv = UploadFile(io.BytesIO(b"k,v\n1,1\n1,2\n"), filename="r.csv")
+        assert "exige claves únicas" in api.import_table(csv, "repetida", "BPLUS_CLUSTERED", "k")["error"]
+
+    # el índice agrupado borra y actualiza por clave: las repetidas tocarían otra fila
+    with TemporaryDirectory() as temp:
+        executor = Executor(data_dir=temp)
+        run(executor, "CREATE TABLE c (k INT, v INT, cat VARCHAR(5)) USING BPLUS_CLUSTERED")
+        run(executor, "INSERT INTO c VALUES (1, 1, 'a'), (2, 2, 'b'), (3, 3, 'a')")
+        assert "duplicada" in error(executor, "INSERT INTO c VALUES (1, 9, 'z')")
+        assert "duplicada" in error(executor, "INSERT INTO c VALUES (7, 9, 'z'), (7, 8, 'z')")
+        assert "duplicada" in error(executor, "UPDATE c SET k = 2 WHERE v = 1")
+        run(executor, "CREATE INDEX ix_cat ON c (cat) USING BPLUS")
+        run(executor, "UPDATE c SET v = 0 WHERE cat = 'a'")
+        run(executor, "UPDATE c SET cat = 'b' WHERE k = 1")
+        run(executor, "UPDATE c SET k = 9 WHERE k = 2")
+        assert run(executor, "SELECT * FROM c")["rows"] == [{"k": 1, "v": 0, "cat": "b"}, {"k": 3, "v": 0, "cat": "a"}, {"k": 9, "v": 2, "cat": "b"}]
+        assert {f["k"] for f in executor.catalog["c"].buscar_secundario("ix_cat", "b", "b")} == {1, 9}
+
+    # 'a' (clave b_c) y 'a_b' (clave c) compartirían el archivo a_b_c
+    with TemporaryDirectory() as temp:
+        executor = Executor(data_dir=temp)
+        run(executor, "CREATE TABLE a (b_c INT PRIMARY KEY, x INT)")
+        assert "choca con la tabla 'a'" in error(executor, "CREATE TABLE a_b (c INT PRIMARY KEY, x INT)")
+        run(executor, "CREATE TABLE ab (c INT PRIMARY KEY, x INT)")
+        api.catalog, api.DATA_DIR = executor.catalog, temp
+        csv = UploadFile(io.BytesIO(b"c,x\n1,1\n"), filename="r.csv")
+        assert "choca" in api.import_table(csv, "a_b", "HASH", "c")["error"]
+
+    # un FLOAT fuera de rango se guardaba como infinito y cada SELECT de la tabla daba HTTP 500
+    with TemporaryDirectory() as temp:
+        executor = Executor(data_dir=temp)
+        run(executor, "CREATE TABLE f (id INT PRIMARY KEY, v FLOAT)")
+        assert "rango de FLOAT" in error(executor, "INSERT INTO f VALUES (1, 1e39)")
+        run(executor, "INSERT INTO f VALUES (1, 3e38)")
+        assert "rango de FLOAT" in error(executor, "UPDATE f SET v = -1e39 WHERE id = 1")
+        assert len(run(executor, "SELECT * FROM f WHERE v < 1e39")["rows"]) == 1
+        for valor in (b"1e39", b"inf", b"nan"):
+            try:
+                parse_csv(b"id,v\n1," + valor + b"\n")
+            except CSVImportError as fallo:
+                assert "rango de FLOAT" in str(fallo), fallo
+            else:
+                raise AssertionError(valor)
+
+    # comparar un INT con un valor que no se puede guardar es válido; antes daba error
+    for kind in ("HASH", "BPLUS", "BPLUS_CLUSTERED"):
+        with TemporaryDirectory() as temp:
+            executor = Executor(data_dir=temp)
+            run(executor, f"CREATE TABLE e (k INT PRIMARY KEY) USING {kind}")
+            run(executor, "INSERT INTO e VALUES (25), (26), (27)")
+            for condicion, esperadas in (("k > 25.5", [26, 27]), ("k = 25.5", []), ("k BETWEEN 25.5 AND 26.5", [26]),
+                                         ("k IN (25.5, 27)", [27]), ("k < 2147483648", [25, 26, 27]), ("k > 2147483648", [])):
+                assert sorted(f["k"] for f in run(executor, "SELECT * FROM e WHERE " + condicion)["rows"]) == esperadas, (kind, condicion)
+            assert "no es un valor válido" in error(executor, "INSERT INTO e VALUES (25.5)")
     print("OK: parser, ejecución, restricciones persistentes, JOIN externo, EXPLAIN, concurrencia y API")
 
 

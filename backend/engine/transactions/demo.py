@@ -136,7 +136,7 @@ def run_safe_demo():
         "transaction_ids": transaction_ids,
         "wait_detected": wait_detected,
         "threads_finished": not first.is_alive() and not second.is_alive(),
-        "active_locks": len(manager.lock_manager.owners),
+        "active_locks": len(manager.lock_manager._locks),
     }
 
 

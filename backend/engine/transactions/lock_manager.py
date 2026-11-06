@@ -1,4 +1,5 @@
 import threading
+from collections import deque
 import time
 
 from .models import LockMode
@@ -15,8 +16,7 @@ class LockTimeoutError(LockError):
 class LockManager:
     def __init__(self):
         self._locks = {}
-        self.owners = {}
-        self.history = []
+        self.history = deque(maxlen=1000)  # solo la demo y las pruebas lo leen; sin tope crece mientras viva el servidor
         self.condition = threading.Condition()
 
     @staticmethod
@@ -38,24 +38,6 @@ class LockManager:
             LockMode.PX: set(),
         }
         return requested_mode in compatibility[existing_mode]
-
-    def _sync_owners(self, resource):
-        lock = self._locks.get(resource)
-        if lock is None:
-            self.owners.pop(resource, None)
-        elif len(lock["owners"]) == 1:
-            self.owners[resource] = next(iter(lock["owners"]))
-        else:
-            self.owners[resource] = set(lock["owners"])
-
-    @staticmethod
-    def _effective_mode(lock):
-        modes = set(lock["owners"].values())
-        if LockMode.PX in modes:
-            return LockMode.PX
-        if LockMode.PU in modes:
-            return LockMode.PU
-        return LockMode.PS
 
     def _can_grant(self, transaction_id, resource, mode):
         lock = self._locks.get(resource)
@@ -104,22 +86,8 @@ class LockManager:
                 lock["owners"][transaction_id] = mode
                 event = "ACQUIRED"
 
-            self._sync_owners(resource)
             self.history.append((event, transaction_id, resource))
             return True
-
-    def release(self, transaction_id, resource):
-        with self.condition:
-            lock = self._locks.get(resource)
-            if lock is None or transaction_id not in lock["owners"]:
-                raise LockError("La transacción no posee el recurso")
-
-            del lock["owners"][transaction_id]
-            if not lock["owners"]:
-                del self._locks[resource]
-            self._sync_owners(resource)
-            self.history.append(("RELEASED", transaction_id, resource))
-            self.condition.notify_all()
 
     def release_all(self, transaction_id):
         with self.condition:
@@ -134,30 +102,10 @@ class LockManager:
                 del lock["owners"][transaction_id]
                 if not lock["owners"]:
                     del self._locks[resource]
-                self._sync_owners(resource)
                 self.history.append(("RELEASED", transaction_id, resource))
 
             if resources:
                 self.condition.notify_all()
-
-    def owner(self, resource):
-        with self.condition:
-            lock = self._locks.get(resource)
-            if lock is None:
-                return None
-            if len(lock["owners"]) == 1:
-                return next(iter(lock["owners"]))
-            return set(lock["owners"])
-
-    def mode(self, resource):
-        with self.condition:
-            lock = self._locks.get(resource)
-            return None if lock is None else self._effective_mode(lock)
-
-    def owners_of(self, resource):
-        with self.condition:
-            lock = self._locks.get(resource)
-            return set() if lock is None else set(lock["owners"])
 
     def has_event(self, event_name, transaction_id):
         with self.condition:

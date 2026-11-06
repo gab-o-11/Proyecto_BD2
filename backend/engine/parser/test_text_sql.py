@@ -1,4 +1,3 @@
-import asyncio
 import importlib
 import io
 import os
@@ -118,12 +117,12 @@ def _importacion():
         api.catalog = {}
         api.DATA_DIR = temp
         api.transaction_manager = TransactionManager()
-        respuesta = asyncio.run(api.import_table(UploadFile(io.BytesIO(contenido.encode()), filename="docs.csv"), "docs", "BPLUS", ""))
+        respuesta = api.import_table(UploadFile(io.BytesIO(contenido.encode()), filename="docs.csv"), "docs", "BPLUS", "")
         assert "error" not in respuesta, respuesta
         assert {"name": "cuerpo", "type": "text"} in respuesta["schema"]
         filas = api.query(api.QueryBody(sql="SELECT id, cuerpo FROM docs WHERE cuerpo LIKE '%inflación%'"))["rows"]
         assert filas == [{"id": 1, "cuerpo": largo.strip()}]
-        respuesta = asyncio.run(api.import_table(UploadFile(io.BytesIO(contenido.encode()), filename="docs.csv"), "mala", "HASH", "cuerpo"))
+        respuesta = api.import_table(UploadFile(io.BytesIO(contenido.encode()), filename="docs.csv"), "mala", "HASH", "cuerpo")
         assert "no puede ser TEXT" in respuesta["error"]
         assert "mala" not in api.catalog
 

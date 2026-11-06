@@ -3,7 +3,7 @@ import io
 import math
 import re
 
-from .catalog import STRLEN
+from .catalog import FLOAT_MAX, STRLEN
 
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 NUMERO = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
@@ -57,7 +57,10 @@ def _convert(value, col_type, row_number, column):
                 raise CSVImportError(f"fila {row_number}, columna '{column}': entero fuera de rango")
             return converted
         if col_type == "float":
-            return float(value)
+            converted = float(value)
+            if not abs(converted) <= FLOAT_MAX:
+                raise CSVImportError(f"fila {row_number}, columna '{column}': '{value}' está fuera del rango de FLOAT")
+            return converted
         if col_type == "str" and len(value.encode("utf-8")) > STRLEN:
             raise CSVImportError(f"fila {row_number}, columna '{column}': texto mayor a {STRLEN} bytes")
         return value

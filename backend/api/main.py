@@ -10,14 +10,14 @@ from engine.parser.scanner import Scanner
 from engine.parser.sql_parser import Parser
 from engine.parser.executor import Executor
 from engine.transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
-from engine.catalog import STRLEN, StorageTable
+from engine.catalog import STRLEN, StorageTable, tabla_que_choca
 from engine.importer import CSVImportError, parse_csv
 from engine.multimedia.pipeline import FeaturePipeline
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_DIR = os.path.dirname(BACKEND_DIR)
 DATA_DIR = os.environ.get("BD2_DATA_DIR") or os.path.join(PROJECT_DIR, "data", "runtime")
-MULTIMEDIA_DIR = os.environ.get("BD2_MULTIMEDIA_DIR") or os.path.join(PROJECT_DIR, "data", "datasets")
+MULTIMEDIA_DIR = os.environ.get("BD2_MULTIMEDIA_DIR") or os.path.join(PROJECT_DIR, "data", "multimedia")
 
 MODELS_DIR = os.environ.get("BD2_MODELS_DIR") or os.path.join(PROJECT_DIR, "data", "modelos")
 
@@ -223,7 +223,7 @@ def rectangulos_indice(nombre: str, column: str, levels: int = 3, limit: int = 3
 
 
 @app.post("/api/tables/import")
-async def import_table(
+def import_table(
     file: UploadFile = File(...),
     table_name: str = Form(...),
     index_kind: str = Form("HASH"),
@@ -239,11 +239,14 @@ async def import_table(
             raise CSVImportError("el nombre de tabla no es válido")
         if table_name in catalog:
             raise CSVImportError(f"la tabla '{table_name}' ya existe")
+        otra = tabla_que_choca(catalog, table_name)
+        if otra:
+            raise CSVImportError(f"el nombre '{table_name}' choca con la tabla '{otra}': sus archivos se mezclarían; usa otro nombre")
         index_kind = index_kind.upper()
         if index_kind not in ("HASH", "BPLUS", "BPLUS_CLUSTERED"):
             raise CSVImportError("el índice debe ser HASH, BPLUS o BPLUS_CLUSTERED")
 
-        headers, schema, rows = parse_csv(await file.read())
+        headers, schema, rows = parse_csv(file.file.read())
         index_field = index_field or headers[0]
         if index_field not in headers:
             raise CSVImportError(f"la columna índice '{index_field}' no existe")
@@ -254,6 +257,12 @@ async def import_table(
         vacia = next((numero for numero, row in enumerate(rows, start=2) if row[index_field] is None), None)
         if vacia is not None:
             raise CSVImportError(f"fila {vacia}: la columna índice '{index_field}' no puede estar vacía")
+        if index_kind == "BPLUS_CLUSTERED":
+            vistas = set()
+            for numero, row in enumerate(rows, start=2):
+                if row[index_field] in vistas:
+                    raise CSVImportError(f"fila {numero}: '{row[index_field]}' se repite en '{index_field}'; BPLUS_CLUSTERED exige claves únicas")
+                vistas.add(row[index_field])
         table = StorageTable(table_name, schema, DATA_DIR, index_field, index_kind)
         table.bulk_insert(rows)
         catalog[table_name] = table

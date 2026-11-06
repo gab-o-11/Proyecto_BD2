@@ -24,6 +24,9 @@ Lo que el sistema **no** hace, para no buscarlo:
 - `CREATE INDEX` no admite columnas `POINT`, que ya tienen su R-Tree, ni índices agrupados.
 - Las tablas creadas antes del mapa de bits de `NULL` no admiten valores nulos hasta recrearlas.
 - La columna del índice principal no admite `NULL`.
+- La columna de un índice `BPLUS_CLUSTERED` no admite valores repetidos, aunque no sea `PRIMARY KEY`.
+- Un nombre de tabla no puede empezar con el nombre de otra seguido de `_` (con `a` creada, `a_b` se rechaza): sus archivos se mezclarían.
+- `FLOAT` usa 4 bytes: se rechazan valores mayores a ±3.4e38, `inf` y `nan`.
 - Un scan lee los textos de todas las columnas `TEXT` aunque la consulta no las proyecte.
 - Un índice `FULLTEXT` no se actualiza por partes: cualquier cambio en la tabla obliga a reconstruirlo completo en la siguiente búsqueda.
 - `MATCH` no admite `JOIN`, `OR`, frases exactas ni búsquedas por proximidad (el índice no guarda posiciones).
