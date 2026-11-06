@@ -298,17 +298,6 @@ class SequentialFile:
             return None
         return self._fields(self.read_record(position))
 
-    def search_range(self, start_key, end_key):
-        results = []
-        for position, fields in self._ordered_with_pos():
-            key_value = fields[self.key_index]
-            if key_value < start_key:
-                continue
-            if key_value > end_key:
-                break
-            results.append(fields)
-        return results
-
     def delete(self, key):
         position = self._find_position(key)
         if position == -1:

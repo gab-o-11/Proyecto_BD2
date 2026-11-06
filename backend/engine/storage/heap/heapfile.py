@@ -111,29 +111,6 @@ class Heapfile:
 
         return new_page_id
 
-    def actualizar_file_header(self, añadir_pagina, añadir_registro):
-        with open(self.filename, "r+b") as f:
-            page_size, num_paginas, num_records, first_id=self.read_file_header()
-            if(añadir_pagina):
-                num_paginas+=1
-            if(añadir_registro):
-                num_records+=1
-            f.seek(0)
-            f.write(struct.pack(self.FILE_HEADER_FORMAT,self.PAGE_SIZE, num_paginas, num_records, 1))
-
-    def actualizar_page_header(self, page_id ,nuevo_registro, eliminar_registro, nuevo_free_list_head=-1):
-        with open(self.filename, "r+b") as f:
-            id, num_registros, num_activos, free_list=self.read_page_header(page_id)
-            if nuevo_registro:
-                num_registros+=1
-                num_activos+=1
-            if eliminar_registro:
-                num_activos-=1
-            if(nuevo_free_list_head!=-1):
-                free_list=nuevo_free_list_head
-            f.seek(page_id*self.PAGE_SIZE)
-            f.write(struct.pack(self.PAGE_HEADER_FORMAT, id, num_registros, num_activos, free_list))
-
     def _puntero(self, f, page_id, slot_id):
         f.seek(self.calcular_slot(page_id, slot_id) + self.RECORD_SIZE - struct.calcsize("i"))
         return struct.unpack("i", f.read(struct.calcsize("i")))[0]
