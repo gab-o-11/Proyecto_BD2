@@ -1,0 +1,2 @@
+-r requirements-entrenamiento.txt
+librosa>=0.10.2
