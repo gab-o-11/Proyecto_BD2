@@ -28,3 +28,9 @@ data/modelos/audio_msd/*
 !data/modelos/fotos/training.json
 !data/modelos/audio_msd/vocabulary.json
 !data/modelos/audio_msd/training.json
+
+# Vocabulario MFCC de grabaciones reales; los archivos de trabajo siguen ignorados.
+!data/modelos/audio_mfcc/
+data/modelos/audio_mfcc/*
+!data/modelos/audio_mfcc/vocabulary.json
+!data/modelos/audio_mfcc/training.json

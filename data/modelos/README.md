@@ -7,21 +7,25 @@ nuevo para cuantizar descriptores. Los datasets, caches y checkpoints no se vers
 |---|---|---|---|---|
 | `fotos/` | Imagen | `SiftExtractor()` | 256 | 128 |
 | `audio_msd/` | HDF5 de Million Song Dataset | `MsdTimbreExtractor()` | 256 | 12 |
+| `audio_mfcc/` | MP3/WAV de FMA Small | `MfccExtractor` configurado desde `training.json` | 256 | 12 |
 
 Cada carpeta contiene `vocabulary.json` (centroides e identificadores) y
 `training.json` (configuracion del extractor, muestra y metricas). Los informes
 conservan las rutas del equipo de entrenamiento como procedencia; no se necesitan
-esas rutas para cargar el vocabulario. Ambos modelos terminaron tras 50 iteraciones
-sin alcanzar la tolerancia de convergencia configurada.
+esas rutas para cargar el vocabulario. Consulta `result.iterations` y
+`result.converged` en cada informe para conocer el criterio de parada alcanzado.
 
 Las imagenes usan SIFT con lado maximo 512 y hasta 500 puntos, sin normalizacion
 adicional. Audio MSD utiliza `analysis/segments_timbre`, sin normalizacion adicional.
 Los HDF5 no contienen grabaciones: este vocabulario no admite directamente MP3/WAV
-ni es intercambiable con MFCC extraidos con librosa.
+ni es intercambiable con MFCC extraidos con librosa. Para grabaciones reales usa
+`audio_mfcc`: 22050 Hz, 13 coeficientes descartando c0, ventanas 2048, salto 512
+(75 % de overlap), maximo 30 segundos y sin normalizacion adicional. El pipeline
+reconstruye estos parametros desde el informe, sin reentrenar.
 
 ## Cargar los modelos
 
-En un entorno con NumPy, OpenCV y h5py, ejecuta desde la raiz:
+En un entorno con NumPy, OpenCV, h5py y librosa, ejecuta desde la raiz:
 
 ```python
 from pathlib import Path
@@ -51,3 +55,17 @@ sus histogramas, TF-IDF e indices para conservar la compatibilidad.
 Para volver a entrenar, consulta los lanzadores `scripts/entrenar_fotos.ps1` y
 `scripts/entrenar_audio.ps1`. La integracion con el servidor se explica en
 [Pipeline multimedia](../../docs/13-multimedia.md).
+
+
+Para usar tambien el vocabulario MFCC, utiliza el ensamblaje del motor:
+
+```python
+from engine.multimedia.pipeline import FeaturePipeline
+pipeline = FeaturePipeline("data/datasets", "data/modelos")
+print(pipeline.modelos())
+```
+
+Las rutas de MP3 en las tablas son relativas a `data/datasets`, por ejemplo
+`audio/fma_small/000/000002.mp3`. Cada tabla debe ajustar y guardar su TF-IDF antes
+de consultar. El vector final tiene 256 componentes; no debe mezclarse con los
+vectores de otra modalidad aunque tenga la misma dimension.

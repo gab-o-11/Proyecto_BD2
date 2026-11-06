@@ -93,3 +93,29 @@ Desde `backend/`:
 Prueba ambos vocabularios con imagenes y HDF5 sinteticos, carga por API, busqueda
 SEQ/IVF/HNSW, rutas fuera de la carpeta permitida, recarga desde disco y preservacion
 de los vocabularios. No requiere descargar los datasets completos ni reentrenar.
+
+
+## Audio real (MP3/WAV) con MFCC
+
+El vocabulario `audio_mfcc` es independiente del timbre de los HDF5 de Million Song.
+Para FMA Small, extrae los MP3 en `data/datasets/audio/fma_small/`. Las carpetas
+vacias no bastan: el lanzador comprobara que hay MP3 antes de entrenar.
+
+```powershell
+.\scripts\entrenar_mfcc.ps1
+# Tras una interrupcion:
+.\scripts\entrenar_mfcc.ps1 -Reanudar
+```
+
+Se guardan `vocabulary.json` y `training.json` en `data/modelos/audio_mfcc/`.
+El pipeline registra esa modalidad cuando existe el modelo y reconstruye el
+extractor con la configuracion exacta de `training.json`: por defecto 22050 Hz,
+13 MFCC descartando c0 (12 componentes), ventanas de 2048 muestras, salto 512
+(75 % de overlap) y hasta 30 segundos por archivo. No recalcula los centroides
+ni TF-IDF al consultar.
+
+Despues de reiniciar la API, consulta `/api/multimedia/models` para obtener su
+`descriptor_id`; crea una tabla VECTOR(256), inserta rutas como
+`audio/fma_small/000/000002.mp3`, y llama al endpoint de features con ese
+identificador. Ajusta TF-IDF e indices por coleccion, como para las otras modalidades.
+No reutilices el vocabulario `audio_msd` para estos MP3.
