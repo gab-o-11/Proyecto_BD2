@@ -35,22 +35,22 @@ def log(message):
     print(time.strftime("[%H:%M:%S]"), message, flush=True)
 
 
-def sha256(path):
-    digest = hashlib.sha256()
+def file_hash(path, algorithm="sha256"):
+    digest = hashlib.new(algorithm)
     with open(path, "rb") as file:
         for chunk in iter(lambda: file.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
 
 
-def download(url, target):
-    """Descarga a .part y la retoma si se cortó; publica el zip solo si el hash coincide."""
+def download(url, target, size=SIZE, check=None):
+    """Descarga a .part y la retoma si se cortó; publica el zip solo si check() lo acepta."""
     partial = target.with_name(target.name + ".part")
     done = partial.stat().st_size if partial.exists() else 0
-    if done > SIZE:
+    if done > size:
         partial.unlink()
         done = 0
-    if done < SIZE:
+    if done < size:
         request = urllib.request.Request(url, headers={"User-Agent": "bd2-dataset-downloader"})
         if done:
             request.add_header("Range", f"bytes={done}-")
@@ -63,21 +63,21 @@ def download(url, target):
                     file.write(chunk)
                     done += len(chunk)
                     if time.monotonic() - last >= 5:
-                        log(f"Descargado {done / 2**20:.0f}/{SIZE / 2**20:.0f} MiB")
+                        log(f"Descargado {done / 2**20:.0f}/{size / 2**20:.0f} MiB")
                         last = time.monotonic()
-    check_zip(partial)
+    (check or check_zip)(partial)
     partial.replace(target)
 
 
 def check_zip(path):
     log("Verificando SHA-256 del zip...")
-    if path.stat().st_size != SIZE or sha256(path) != SHA256:
+    if path.stat().st_size != SIZE or file_hash(path) != SHA256:
         raise ValueError(f"{path} no es el zip esperado (tamaño o SHA-256 distintos); bórralo y vuelve a descargar")
 
 
-def extract(archive, destination):
+def extract(archive, destination, name=NAME):
     """Descomprime en una carpeta temporal, rechazando rutas fuera de ella."""
-    temporary = destination / f".{NAME}.tmp"
+    temporary = destination / f".{name}.tmp"
     shutil.rmtree(temporary, ignore_errors=True)
     temporary.mkdir()
     base = temporary.resolve()
@@ -88,7 +88,7 @@ def extract(archive, destination):
                 raise ValueError(f"ruta insegura en el zip: {member.filename}")
         log(f"Descomprimiendo {len(file.infolist()):,} entradas...")
         file.extractall(temporary)
-    return temporary / NAME
+    return temporary / name
 
 
 def validate(dataset):
@@ -152,7 +152,7 @@ def main():
             writer.writerow(("split", "ruta", "wnid", "clase"))
             writer.writerows(rows)
         summary = {"url": args.url, "zip_sha256": SHA256, "train": len(rows) - VAL, "val": VAL, "classes": CLASSES,
-                   "manifest_sha256": sha256(extracted / "manifest.csv")}
+                   "manifest_sha256": file_hash(extracted / "manifest.csv")}
         (extracted / ".verificado.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         extracted.replace(dataset)
         shutil.rmtree(extracted.parent, ignore_errors=True)
