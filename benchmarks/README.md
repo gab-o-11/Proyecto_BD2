@@ -89,3 +89,27 @@ rtk proxy micromamba run -n bd2 python -m jupyter nbconvert \
   --ExecutePreprocessor.kernel_name=bd2 \
   --ExecutePreprocessor.timeout=3600
 ```
+
+## Parte 4: búsqueda por similitud de imágenes
+
+[parte4.ipynb](parte4.ipynb) compara IVF y HNSW (índices vectoriales del motor sobre
+FAISS) con métrica euclidiana y coseno, sobre 1 000, 10 000 y 100 000 imágenes de
+Tiny ImageNet con k = 10. Mide la construcción, el tiempo de consulta, el Recall@10
+contra la búsqueda exacta del motor y la memoria del índice. Hace un barrido de
+`PROBES` y `EF_SEARCH` e incluye una galería de aciertos y errores, además de una
+tabla de recomendaciones. Los vectores salen del mismo pipeline que `SIMILAR_TO`:
+SIFT, el vocabulario de `data/modelos/fotos` y TF-IDF por colección. Los resultados
+quedan en `multimedia_results/`.
+
+Antes hay que descargar el dataset con `python scripts/descargar_tiny_imagenet.py`.
+La primera corrida extrae SIFT de las 110 000 imágenes, lo que toma unos minutos
+con todos los núcleos. Los histogramas quedan en
+`data/generated/tiny_imagenet_sift_histogramas.npz` y se reutilizan si el
+manifiesto y el vocabulario no cambiaron.
+
+```sh
+rtk proxy micromamba run -n bd2 python -m jupyter nbconvert \
+  --to notebook --execute --inplace benchmarks/parte4.ipynb \
+  --ExecutePreprocessor.kernel_name=bd2 \
+  --ExecutePreprocessor.timeout=3600
+```
