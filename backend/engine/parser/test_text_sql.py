@@ -126,6 +126,30 @@ def _importacion():
         assert "no puede ser TEXT" in respuesta["error"]
         assert "mala" not in api.catalog
 
+        sin_id = "titulo,cuerpo\nuno,\"" + largo + "\"\ndos,breve\ntres,otro\n"
+        for nombre, tipo in (("serialh", "HASH"), ("serialb", "BPLUS"), ("serialc", "BPLUS_CLUSTERED")):
+            respuesta = api.import_table(UploadFile(io.BytesIO(sin_id.encode()), filename="auto.csv"), nombre, tipo, "")
+            assert "error" not in respuesta, respuesta
+            assert respuesta["schema"][0] == {"name": "id", "type": "int"}
+            assert api.catalog[nombre].index_field == "id"
+            filas = api.query(api.QueryBody(sql="SELECT id, titulo FROM " + nombre + " ORDER BY id"))["rows"]
+            assert filas == [{"id": 1, "titulo": "uno"}, {"id": 2, "titulo": "dos"}, {"id": 3, "titulo": "tres"}]
+            sql = "INSERT INTO " + nombre + " (titulo, cuerpo) VALUES ('cuatro', 'x'), ('cinco', 'y'); "
+            sql += "INSERT INTO " + nombre + " (id, titulo) VALUES (10, 'diez'); "
+            sql += "INSERT INTO " + nombre + " (titulo) VALUES ('once'); "
+            sql += "DELETE FROM " + nombre + " WHERE id = 11"
+            assert "error" not in api.query(api.QueryBody(sql=sql)), nombre
+            duplicada = api.query(api.QueryBody(sql="INSERT INTO " + nombre + " (id, titulo) VALUES (2, 'otra vez')"))
+            assert "duplicada" in duplicada["error"], duplicada
+            api.catalog[nombre].cerrar()
+            reabierto = Executor(catalog=_load_tables(temp), data_dir=temp)
+            run(reabierto, "INSERT INTO " + nombre + " (titulo) VALUES ('doce')")
+            filas = _filas(reabierto, "SELECT id, titulo FROM " + nombre + " WHERE id > 3 ORDER BY id")
+            assert filas == [{"id": 4, "titulo": "cuatro"}, {"id": 5, "titulo": "cinco"}, {"id": 10, "titulo": "diez"}, {"id": 12, "titulo": "doce"}], filas
+            for tabla in reabierto.catalog.values():
+                tabla.cerrar()
+            api.catalog = _load_tables(temp)
+
 
 def main():
     for sql in ("CREATE TABLE t (id INT PRIMARY KEY, c TEXT NOT NULL, d TEXT)", "CREATE TABLE t (c TEXT) USING BPLUS_CLUSTERED"):

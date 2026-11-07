@@ -85,7 +85,7 @@ export default function FilesPanel({ tables, onImport, onReset, loading, plegado
           <div className="idx-title">Importar CSV</div>
           <input ref={inputRef} type="file" accept=".csv,text/csv" disabled={loading} />
           <input value={tableName} onChange={(event) => setTableName(event.target.value)} placeholder="Nombre de tabla" disabled={loading} />
-          <input value={indexField} onChange={(event) => setIndexField(event.target.value)} placeholder="Columna índice (opcional)" disabled={loading} />
+          <input value={indexField} onChange={(event) => setIndexField(event.target.value)} placeholder="Columna índice (por defecto: id)" disabled={loading} />
           <select value={indexKind} onChange={(event) => setIndexKind(event.target.value)} disabled={loading}>
             <option value="HASH">Hash extensible</option>
             <option value="BPLUS">B+ Tree</option>
