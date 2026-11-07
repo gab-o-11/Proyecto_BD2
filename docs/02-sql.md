@@ -30,6 +30,7 @@ DROP TABLE [IF EXISTS] clientes;
 - El índice principal va sobre la columna `PRIMARY KEY` o, si no hay, sobre la primera columna que no sea `POINT` ni `TEXT`.
 - `TEXT` no puede ser `PRIMARY KEY` ni tener índices `HASH` o `BPLUS`. Admite `LIKE`, `=`, `IS NULL`, `ORDER BY` y `GROUP BY` como un `VARCHAR`.
 - Al importar un CSV, una columna de texto con algún valor de más de 32 bytes se crea como `TEXT`.
+- Al importar un CSV sin elegir columna índice, se usa la columna `id`. Si el CSV no la tiene, se agrega una columna `id` `INT PRIMARY KEY` numerada desde 1. Como un `SERIAL` de PostgreSQL, un `INSERT` que la omite recibe el siguiente valor. El contador solo avanza: no reutiliza los valores borrados y salta por encima de un `id` escrito a mano.
 - `PRIMARY KEY` exige valores únicos y no nulos. `NOT NULL` impide valores nulos.
 
 ## Índices secundarios
