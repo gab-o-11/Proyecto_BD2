@@ -14,6 +14,14 @@ Cada carpeta contiene `vocabulary.json` (centroides e identificadores) y
 conservan las rutas del equipo de entrenamiento como procedencia; no se necesitan
 esas rutas para cargar el vocabulario. Consulta `result.iterations` y
 `result.converged` en cada informe para conocer el criterio de parada alcanzado.
+`result.history` guarda por iteración la inercia de los centros de entrada, el
+desplazamiento maximo y los grupos vacios (solo en entrenamientos posteriores a
+este campo).
+
+Para analizar el aprendizaje, la carpeta de entrenamiento (no versionada) tambien
+deja `snapshots/iter_NNN.npy` con los centroides tras cada iteracion (`iter_000`
+es la inicializacion K-Means++) y `sample-files.npy`, que indica, para cada fila
+de `sample.npy`, su indice en `dataset.files` de `run.json`.
 
 Las imagenes usan SIFT con lado maximo 512 y hasta 500 puntos, sin normalizacion
 adicional. Audio MSD utiliza `analysis/segments_timbre`, sin normalizacion adicional.

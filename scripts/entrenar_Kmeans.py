@@ -212,15 +212,18 @@ class DescriptorReservoir:
     def __init__(self, capacity, dimension, seed):
         self.rows = np.empty((capacity, dimension), dtype=np.float64)
         self.priorities = np.empty(capacity)
+        # Índice en dataset.files (run.json) del archivo de cada descriptor.
+        self.origins = np.empty(capacity, dtype=np.int64)
         self.used = 0
         self.rng = np.random.default_rng(seed)
 
-    def add(self, rows):
+    def add(self, rows, origin):
         keys = self.rng.random(len(rows))
         capacity = len(self.rows)
         fill = min(capacity - self.used, len(rows))
         self.rows[self.used:self.used + fill] = rows[:fill]
         self.priorities[self.used:self.used + fill] = keys[:fill]
+        self.origins[self.used:self.used + fill] = origin
         self.used += fill
         if fill == len(rows):
             return
@@ -236,10 +239,15 @@ class DescriptorReservoir:
         incoming = keep[keep >= capacity] - capacity
         self.rows[~retained] = rows[incoming]
         self.priorities[~retained] = keys[incoming]
+        self.origins[~retained] = origin
 
     @property
     def values(self):
         return self.rows[:self.used]
+
+    @property
+    def files(self):
+        return self.origins[:self.used]
 
 
 def prepare_sample(args, paths, entries, extract, config, output):
@@ -284,7 +292,7 @@ def prepare_sample(args, paths, entries, extract, config, output):
                 reservoir = DescriptorReservoir(args.max_descriptores, rows.shape[1], args.semilla)
             if rows.shape[1] != reservoir.rows.shape[1]:
                 raise ValueError(f"dimensiones incompatibles en {path}; no mezcles extractores")
-            reservoir.add(rows)
+            reservoir.add(rows, index)
             seen += len(rows)
             good += 1
             if (index + 1) % 25 == 0 or index + 1 == len(paths):
@@ -297,6 +305,8 @@ def prepare_sample(args, paths, entries, extract, config, output):
     sample = reservoir.values
     save_json(output / "sample-info.json", {"usable_files": good, "skipped_files": skipped,
                                            "descriptors_seen": seen, "sample_size": len(sample)})
+    # Antes que sample.npy: su existencia marca la muestra como terminada.
+    save_array(output / "sample-files.npy", reservoir.files)
     save_array(sample_path, sample)
     log(f"Muestra preparada: {sample.shape}; {skipped} archivos omitidos.")
     return np.load(sample_path, mmap_mode="r", allow_pickle=False)
@@ -337,9 +347,14 @@ def initialize(rows, k, batch_size, seed):
     return np.array(centers)
 
 
-def save_checkpoint(path, centers, iteration, converged):
+def save_checkpoint(path, centers, iteration, converged, history):
+    # La foto va antes del checkpoint: un checkpoint nunca apunta a una foto faltante.
+    snapshots = path.parent / "snapshots"
+    snapshots.mkdir(exist_ok=True)
+    save_array(snapshots / f"iter_{iteration:03d}.npy", centers)
     atomic_write(path, lambda file: np.savez(file, centers=centers,
-                                           iteration=iteration, converged=converged))
+                                           iteration=iteration, converged=converged,
+                                           history=np.array(json.dumps(history))))
 
 
 def fit(rows, args, checkpoint):
@@ -348,22 +363,26 @@ def fit(rows, args, checkpoint):
             centers = saved["centers"].copy()
             iteration = int(saved["iteration"])
             converged = bool(saved["converged"])
+            # Checkpoints anteriores al historial lo empiezan vacío.
+            history = json.loads(str(saved["history"])) if "history" in saved.files else []
         if centers.shape != (args.k, rows.shape[1]) or not np.isfinite(centers).all():
             raise ValueError("checkpoint inválido")
         log(f"Checkpoint recuperado: iteración {iteration}; convergencia={converged}.")
     else:
         log("Inicializando centroides con K-Means++...")
         centers = initialize(rows, args.k, args.lote, args.semilla)
-        iteration, converged = 0, False
-        save_checkpoint(checkpoint, centers, iteration, converged)
+        iteration, converged, history = 0, False, []
+        save_checkpoint(checkpoint, centers, iteration, converged, history)
     while iteration < args.iteraciones and not converged:
         began = time.monotonic()
         last_progress = began
         sums = np.zeros_like(centers)
         counts = np.zeros(args.k, dtype=np.int64)
-        for start, block, labels, _ in assignment(rows, centers, args.lote):
+        inertia = 0.0
+        for start, block, labels, distances in assignment(rows, centers, args.lote):
             np.add.at(sums, labels, block)
             counts += np.bincount(labels, minlength=args.k)
+            inertia += float(distances.sum())
             now = time.monotonic()
             if now - last_progress >= 10:
                 log(f"Iteración {iteration + 1}: {start + len(block)}/{len(rows)} descriptores")
@@ -375,10 +394,15 @@ def fit(rows, args, checkpoint):
         movement = float(np.linalg.norm(new - centers, axis=1).max())
         if not math.isfinite(movement):
             raise ValueError("actualización no finita de centroides")
+        if not math.isfinite(inertia):
+            raise ValueError("inercia no finita")
         centers = new
         iteration += 1
         converged = movement <= args.tolerancia
-        save_checkpoint(checkpoint, centers, iteration, converged)
+        # La inercia es la de los centros de entrada (snapshots/iter_{iteration-1}).
+        history.append({"iteration": iteration, "inertia": inertia, "movement": movement,
+                        "empty": int((counts == 0).sum())})
+        save_checkpoint(checkpoint, centers, iteration, converged, history)
         elapsed = time.monotonic() - began
         log(f"Iteración {iteration}/{args.iteraciones}: desplazamiento={movement:.6g}, "
             f"vacíos={int((counts == 0).sum())}, {elapsed:.1f} s")
@@ -390,7 +414,8 @@ def fit(rows, args, checkpoint):
     if not math.isfinite(inertia):
         raise ValueError("inercia no finita")
     return centers, {"iterations": iteration, "converged": converged,
-                     "inertia": inertia, "cluster_sizes": counts.tolist()}
+                     "inertia": inertia, "cluster_sizes": counts.tolist(),
+                     "history": history}
 
 
 def run(args):
@@ -510,6 +535,17 @@ def self_test():
         second, report = run(parser().parse_args(argv + ["--reanudar"]))
         assert first == second and report["result"]["converged"]
         assert report["result"]["iterations"] == 2
+        # El historial sobrevive a la reanudación sin duplicarse.
+        history = report["result"]["history"]
+        assert [row["iteration"] for row in history] == [1, 2]
+        assert history[1]["inertia"] == 4.0 and history[1]["movement"] == 0.0
+        model = root / "model"
+        assert sorted(p.name for p in (model / "snapshots").iterdir()) == [
+            "iter_000.npy", "iter_001.npy", "iter_002.npy"]
+        assert np.array_equal(np.load(model / "snapshots" / "iter_002.npy"), first["centroids"])
+        sample = np.load(model / "sample.npy")
+        origins = np.load(model / "sample-files.npy")
+        assert origins.tolist() == (sample[:, 0] == 10).astype(int).tolist()  # a.npy=0, b.npy=1
         payload = {key: value for key, value in first.items() if key != "vocabulary_id"}
         assert digest(payload) == first["vocabulary_id"]
         # No sobrescribir entrenamientos ni aceptar otra configuración al reanudar.
@@ -541,9 +577,10 @@ def self_test():
         population = np.arange(100, dtype=np.float64).reshape(-1, 1)
         reservoir = DescriptorReservoir(7, 1, 42)
         for offset in range(0, 100, 11):
-            reservoir.add(population[offset:offset + 11])
+            reservoir.add(population[offset:offset + 11], offset // 11)
         expected = np.argsort(np.random.default_rng(42).random(100))[:7]
         assert set(reservoir.values[:, 0]) == set(expected)
+        assert reservoir.files.tolist() == (reservoir.values[:, 0] // 11).astype(int).tolist()
         assert reservoir.values.shape == (7, 1)
         resume_args = parser().parse_args(argv)
         paths, dataset_info = discover(resume_args)

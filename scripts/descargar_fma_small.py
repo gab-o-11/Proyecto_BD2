@@ -8,7 +8,8 @@ Queda en data/multimedia/audio/fma_small/, donde lo leen entrenar_mfcc.ps1 y SIM
 El zip se verifica con el SHA-1 que publica FMA (github.com/mdeff/fma) antes de
 descomprimir. Luego se comprueba que los 8000 MP3 coinciden en ruta y tamaño con los
 que entrenaron data/modelos/audio_mfcc (training.json): la colección es la misma
-que la del vocabulario. manifest.csv lista cada MP3 con su ruta relativa a
+que la del vocabulario. Si alguna entrada no descomprime, se omite y queda listada en
+.verificado.json. manifest.csv lista cada MP3 con su ruta relativa a
 data/multimedia y su track_id. Volver a ejecutarlo no repite el trabajo si ya está verificado.
 Necesita unos 15 GB libres mientras descomprime (zip + MP3).
 """
@@ -21,13 +22,14 @@ import sys
 import zipfile
 from pathlib import Path
 
-from descargar_tiny_imagenet import ROOT, download, extract, file_hash, log
+from descargar_tiny_imagenet import ROOT, download, file_hash, log
 
 URL = "https://os.unil.cloud.switch.ch/fma/fma_small.zip"
 SHA1 = "ade154f733639d52e35e32f5593efe5be76c6d70"
 SIZE = 7_679_594_875
 NAME = "fma_small"
 TRAINING = ROOT / "data" / "modelos" / "audio_mfcc" / "training.json"
+MAX_CORRUPT = 10
 
 
 def check_zip(path):
@@ -36,11 +38,49 @@ def check_zip(path):
         raise ValueError(f"{path} no es el zip esperado (tamaño o SHA-1 distintos); bórralo y vuelve a descargar")
 
 
-def validate(dataset, training):
+def extract(archive, destination):
+    """Descomprime en una carpeta temporal y devuelve (carpeta, entradas corruptas omitidas).
+
+    No se usa extractall: una entrada dañada se omite en vez de abortar todo (con el SHA-1 verificado
+    no debería pasar; una descarga con bytes alterados sí lo causó en 120/120323.mp3). Retoma una
+    extracción interrumpida reutilizando los archivos que ya tienen el tamaño correcto.
+    """
+    temporary = destination / f".{NAME}.tmp"
+    temporary.mkdir(exist_ok=True)
+    base = temporary.resolve()
+    corrupt = []
+    with zipfile.ZipFile(archive) as file:
+        members = file.infolist()
+        for member in members:
+            target = (temporary / member.filename).resolve()
+            if target != base and base not in target.parents:
+                raise ValueError(f"ruta insegura en el zip: {member.filename}")
+        log(f"Descomprimiendo {len(members):,} entradas...")
+        for index, member in enumerate(members, 1):
+            target = temporary / member.filename
+            if member.is_dir() or (target.is_file() and target.stat().st_size == member.file_size):
+                continue
+            try:
+                file.extract(member, temporary)
+            except (OSError, EOFError, zipfile.BadZipFile) as error:   # BadZipFile: CRC; EOFError: flujo truncado
+                if getattr(error, "errno", None) is not None:          # disco lleno, permisos...: no es dato corrupto
+                    raise
+                target.unlink(missing_ok=True)   # bz2 lanza OSError("Invalid data stream") sin errno
+                corrupt.append(member.filename)
+                log(f"Omitida entrada corrupta {member.filename}: {error}")
+                if len(corrupt) > MAX_CORRUPT:
+                    raise ValueError(f"más de {MAX_CORRUPT} entradas corruptas: el zip no es utilizable") from error
+            if index % 1000 == 0:
+                log(f"Descomprimidas {index:,}/{len(members):,}")
+    return temporary / NAME, corrupt
+
+
+def validate(dataset, training, corrupt=()):
     """Compara los MP3 con los del entrenamiento y devuelve las filas del manifiesto."""
     expected = {item["path"].replace("\\", "/"): item["size"] for item in training["specification"]["dataset"]["files"]}
     found = {mp3.relative_to(dataset).as_posix(): mp3.stat().st_size for mp3 in dataset.rglob("*.mp3")}
-    missing, extra = expected.keys() - found.keys(), found.keys() - expected.keys()
+    skipped = {name.split("/", 1)[1] for name in corrupt}   # "fma_small/120/x.mp3" -> "120/x.mp3"
+    missing, extra = expected.keys() - found.keys() - skipped, found.keys() - expected.keys()
     resized = {path for path in expected.keys() & found.keys() if expected[path] != found[path]}
     assert not (missing or extra or resized), (
         f"los MP3 no coinciden con {TRAINING.name}: {len(missing)} faltan, {len(extra)} sobran, "
@@ -80,14 +120,14 @@ def main():
             else:
                 log(f"Descargando {args.url} ({SIZE / 2**30:.1f} GiB)...")
                 download(args.url, archive, SIZE, check_zip)
-        extracted = extract(archive, audio, NAME)
+        extracted, corrupt = extract(archive, audio)
         log("Comparando los MP3 con los del vocabulario...")
-        rows = validate(extracted, training)
+        rows = validate(extracted, training, corrupt)
         with open(extracted / "manifest.csv", "w", newline="", encoding="utf-8") as file:
             writer = csv.writer(file, lineterminator="\n")
             writer.writerow(("ruta", "track_id"))
             writer.writerows(rows)
-        summary = {"url": args.url, "zip_sha1": SHA1, "tracks": len(rows),
+        summary = {"url": args.url, "zip_sha1": SHA1, "tracks": len(rows), "corrupt_in_zip": corrupt,
                    "vocabulary_id": training["vocabulary_id"],
                    "manifest_sha256": file_hash(extracted / "manifest.csv")}
         (extracted / ".verificado.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
