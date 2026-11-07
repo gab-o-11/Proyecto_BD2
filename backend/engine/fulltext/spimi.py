@@ -6,7 +6,7 @@ import struct
 
 from .preprocess import bolsa
 
-LIMITE_POSTINGS = 200_000
+LIMITE_POSTINGS = 200
 FAN_IN = 64
 LARGO = struct.Struct("<H")
 CANTIDAD = struct.Struct("<I")

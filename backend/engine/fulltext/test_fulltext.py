@@ -96,7 +96,7 @@ def _spimi():
         unico = os.path.join(carpeta, "unico")
         varios = os.path.join(carpeta, "varios")
         multinivel = os.path.join(carpeta, "multinivel")
-        meta_unico = spimi.construir(iter(documentos), unico)
+        meta_unico = spimi.construir(iter(documentos), unico, limite_postings=10**9)
         meta_varios = spimi.construir(iter(documentos), varios, limite_postings=300)
         meta_multinivel = spimi.construir(iter(documentos), multinivel, limite_postings=50, fan_in=4)
         assert meta_unico["bloques"] == 1

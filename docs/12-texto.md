@@ -68,7 +68,7 @@ Documentos y consultas pasan por los mismos pasos que en el laboratorio 9:
 
 ```
 documentos ──► diccionario en memoria  término → [(doc, tf), …]
-                 │  se llena el bloque (200 000 postings)
+                 │  se llena el bloque (200 postings)
                  ▼
                bloque .blk0, .blk1, …  (términos ordenados)
                  │  merge k-way con un heap, de 64 bloques a la vez
