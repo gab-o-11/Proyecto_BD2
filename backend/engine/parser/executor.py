@@ -205,6 +205,10 @@ class Executor(Visitor):
                 columnas.append(c if c in almacenes else self._columna(tabla, c))
             if len(columnas) != len(set(columnas)):
                 raise SemanticError("hay columnas repetidas en INSERT")
+        seriales = []
+        for c, definicion in tabla.column_definitions.items():
+            if definicion.get("serial"):
+                seriales.append(c)
         filas = []
         for valores in node.all_values():
             if len(valores) != len(columnas):
@@ -216,7 +220,15 @@ class Executor(Visitor):
             for c in almacenes:
                 fila[c] = None
             fila.update(zip(columnas, valores))
-            filas.append(self._validar_fila(tabla, fila))
+            for c in seriales:
+                if fila[c] is None:
+                    fila[c] = tabla.siguiente_serial(c)
+            fila = self._validar_fila(tabla, fila)
+            for c in seriales:
+                tabla.avanzar_serial(c, fila[c])
+            filas.append(fila)
+        if seriales:
+            tabla._write_descriptor()
         self._validar_claves(tabla, filas)
         hijo = planner.resultado(filas, Perfil(tabla).ancho)
 

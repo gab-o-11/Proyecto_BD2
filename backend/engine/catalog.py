@@ -247,6 +247,17 @@ class StorageTable(SpatialTable, VectorTable, TextIndexTable):
         with open(path, "w") as f:
             json.dump(descriptor, f)
 
+    def siguiente_serial(self, columna):
+        definicion = self.column_definitions[columna]
+        valor = definicion["next"]
+        definicion["next"] = valor + 1
+        return valor
+
+    def avanzar_serial(self, columna, valor):
+        definicion = self.column_definitions[columna]
+        if valor >= definicion["next"]:
+            definicion["next"] = valor + 1
+
     def _field_index(self, field):
         offset = 0
         for col, col_type in self.schema:

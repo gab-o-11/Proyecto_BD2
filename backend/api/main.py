@@ -11,7 +11,7 @@ from engine.parser.sql_parser import Parser
 from engine.parser.executor import Executor
 from engine.transactions import LockError, LockMode, Resource, TransactionError, TransactionManager
 from engine.catalog import STRLEN, StorageTable, tabla_que_choca
-from engine.importer import CSVImportError, parse_csv
+from engine.importer import ID_SERIAL, CSVImportError, agregar_id, parse_csv
 from engine.multimedia.pipeline import FeaturePipeline
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -247,7 +247,11 @@ def import_table(
             raise CSVImportError("el índice debe ser HASH, BPLUS o BPLUS_CLUSTERED")
 
         headers, schema, rows = parse_csv(file.file.read())
-        index_field = index_field or headers[0]
+        definiciones = None
+        if not index_field:
+            if ID_SERIAL not in headers:
+                definiciones = agregar_id(headers, schema, rows)
+            index_field = ID_SERIAL
         if index_field not in headers:
             raise CSVImportError(f"la columna índice '{index_field}' no existe")
         if dict(schema)[index_field] == "point":
@@ -263,7 +267,7 @@ def import_table(
                 if row[index_field] in vistas:
                     raise CSVImportError(f"fila {numero}: '{row[index_field]}' se repite en '{index_field}'; BPLUS_CLUSTERED exige claves únicas")
                 vistas.add(row[index_field])
-        table = StorageTable(table_name, schema, DATA_DIR, index_field, index_kind)
+        table = StorageTable(table_name, schema, DATA_DIR, index_field, index_kind, definiciones)
         table.bulk_insert(rows)
         catalog[table_name] = table
         return {

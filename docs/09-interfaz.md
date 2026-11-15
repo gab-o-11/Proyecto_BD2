@@ -16,7 +16,7 @@ La interfaz está en <http://localhost:5173> y se organiza en paneles:
 ## Archivos
 
 - Lista las tablas con su cantidad de filas, el tipo de almacenamiento (heap o secuencial), sus columnas y sus índices: principal, secundarios y R-Tree.
-- **Importar CSV**: archivo, nombre de tabla, columna índice y tipo de índice. Los tipos se infieren solos (`INT`, `FLOAT`, texto o `POINT`) y una celda vacía se guarda como `NULL`.
+- **Importar CSV**: archivo, nombre de tabla, columna índice y tipo de índice. Sin columna índice se usa `id`, y si el CSV no la tiene se agrega una autoincremental. Los tipos se infieren solos (`INT`, `FLOAT`, texto o `POINT`) y una celda vacía se guarda como `NULL`.
 - **Borrar base de datos**: elimina todas las tablas y sus archivos, con confirmación.
 - El botón ◂ pliega el panel a una franja lateral.
 

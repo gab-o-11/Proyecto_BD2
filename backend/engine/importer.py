@@ -5,6 +5,7 @@ import re
 
 from .catalog import FLOAT_MAX, STRLEN
 
+ID_SERIAL = "id"
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 NUMERO = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
 PUNTO = re.compile(r"^POINT\s*\(\s*(" + NUMERO + r")\s*[, ]\s*(" + NUMERO + r")\s*\)$", re.IGNORECASE)
@@ -12,6 +13,14 @@ PUNTO = re.compile(r"^POINT\s*\(\s*(" + NUMERO + r")\s*[, ]\s*(" + NUMERO + r")\
 
 class CSVImportError(Exception):
     pass
+
+
+def agregar_id(headers, schema, rows):
+    headers.insert(0, ID_SERIAL)
+    schema.insert(0, (ID_SERIAL, "int"))
+    for numero, row in enumerate(rows, start=1):
+        row[ID_SERIAL] = numero
+    return {ID_SERIAL: {"type": "INT", "size": None, "primary_key": True, "not_null": True, "serial": True, "next": len(rows) + 1}}
 
 
 def _infer_type(values):
