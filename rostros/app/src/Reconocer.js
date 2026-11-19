@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Image, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
+import { Animated, Easing, Image, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 
 import { reconocer, reducir, urlFoto } from './api';
@@ -8,9 +8,50 @@ import PermisoCamara from './PermisoCamara';
 import { colores } from './tema';
 
 const INTERVALO = 500;
+const DURACION = 300;
+const MEDIDAS = ['left', 'top', 'width', 'height'];
 
 function porcentaje(valor) {
   return valor == null ? '—' : `${Math.round(valor * 100)} %`;
+}
+
+function Recuadro({ caja }) {
+  const animado = useRef({
+    left: new Animated.Value(caja.left),
+    top: new Animated.Value(caja.top),
+    width: new Animated.Value(caja.width),
+    height: new Animated.Value(caja.height),
+  }).current;
+
+  useEffect(() => {
+    Animated.parallel(
+      MEDIDAS.map((medida) =>
+        Animated.timing(animado[medida], {
+          toValue: caja[medida],
+          duration: DURACION,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: false,
+        }),
+      ),
+    ).start();
+  }, [animado, caja.left, caja.top, caja.width, caja.height]);
+
+  return (
+    <Animated.View
+      style={[
+        estilos.caja,
+        {
+          left: animado.left,
+          top: animado.top,
+          width: animado.width,
+          height: animado.height,
+          borderColor: caja.cara.nombre ? colores.acierto : colores.desconocido,
+        },
+      ]}
+    >
+      <Text style={estilos.etiqueta}>{`${caja.cara.nombre ?? 'desconocido'} ${porcentaje(caja.cara.similitud)}`}</Text>
+    </Animated.View>
+  );
 }
 
 function cajasEnVista(resultado, vista, espejo) {
@@ -103,21 +144,7 @@ export default function Reconocer() {
           onCameraReady={() => setLista(true)}
         />
         {cajas.map((caja) => (
-          <View
-            key={caja.indice}
-            style={[
-              estilos.caja,
-              {
-                left: caja.left,
-                top: caja.top,
-                width: caja.width,
-                height: caja.height,
-                borderColor: caja.cara.nombre ? colores.acierto : colores.desconocido,
-              },
-            ]}
-          >
-            <Text style={estilos.etiqueta}>{`${caja.cara.nombre ?? 'desconocido'} ${porcentaje(caja.cara.similitud)}`}</Text>
-          </View>
+          <Recuadro key={caja.cara.persona_id ?? `cara-${caja.indice}`} caja={caja} />
         ))}
         <View style={estilos.barra}>
           <Text style={estilos.fuente}>{resultado ? `● ${desdeCache ? 'caché' : 'motor'}` : 'conectando…'}</Text>
