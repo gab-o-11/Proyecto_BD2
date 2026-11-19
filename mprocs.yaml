@@ -9,3 +9,5 @@ procs:
     shell: "pnpm dev:redis"
   rostros:
     shell: "pnpm dev:rostros"
+  rostros-app:
+    shell: "pnpm dev:rostros-app"
