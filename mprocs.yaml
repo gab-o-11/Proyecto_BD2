@@ -5,3 +5,7 @@ procs:
     shell: "pnpm dev:frontend"
   rag:
     shell: "pnpm dev:rag"
+  redis:
+    shell: "pnpm dev:redis"
+  rostros:
+    shell: "pnpm dev:rostros"
