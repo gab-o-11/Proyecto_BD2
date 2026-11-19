@@ -363,6 +363,24 @@ def _filas_vectoriales(tabla, almacen, pares, metrica, puntaje):
             yield fila
 
 
+FACTOR_VENTANA = 4
+
+
+def _filas_filtradas(buscar, total, k, filtro, tabla, almacen, metrica, puntaje):
+    ventana = k
+    while True:
+        aceptadas = []
+        for fila in _filas_vectoriales(tabla, almacen, buscar(ventana), metrica, puntaje):
+            if filtro.evaluar(fila) is True:
+                aceptadas.append(fila)
+                if len(aceptadas) == k:
+                    break
+        if len(aceptadas) == k or ventana >= total:
+            yield from aceptadas
+            return
+        ventana = min(ventana * FACTOR_VENTANA, total)
+
+
 class VectorIndexScan(Nodo):
     tipo = "Vector Index Scan"
 
@@ -375,6 +393,7 @@ class VectorIndexScan(Nodo):
         self.k = k
         self.parametros = parametros
         self.puntaje = puntaje
+        self.filtro = None
 
     def titulo(self):
         return "Vector Index Scan using " + self.vectorial.nombre + " on " + self.tabla.name
@@ -386,13 +405,22 @@ class VectorIndexScan(Nodo):
         return self.vectorial.nombre
 
     def detalles(self):
-        return ["Similarity: " + self.vectorial.columna + " k=" + str(self.k),
-                "Metric: " + self.vectorial.metrica,
-                self.vectorial.tipo + ": " + self.ajustes]
+        salida = ["Similarity: " + self.vectorial.columna + " k=" + str(self.k),
+                  "Metric: " + self.vectorial.metrica,
+                  self.vectorial.tipo + ": " + self.ajustes]
+        if self.filtro is not None:
+            salida.append("Refill: x" + str(FACTOR_VENTANA) + " until k rows pass " + self.filtro.texto)
+        return salida
+
+    def _buscar(self, ventana):
+        return self.vectorial.estructura.buscar(self.consulta, ventana, **self.parametros)
 
     def producir(self):
-        pares = self.vectorial.estructura.buscar(self.consulta, self.k, **self.parametros)
-        yield from _filas_vectoriales(self.tabla, self.vectorial.almacen, pares, self.vectorial.metrica, self.puntaje)
+        almacen = self.vectorial.almacen
+        if self.filtro is None:
+            yield from _filas_vectoriales(self.tabla, almacen, self._buscar(self.k), self.vectorial.metrica, self.puntaje)
+            return
+        yield from _filas_filtradas(self._buscar, len(almacen), self.k, self.filtro, self.tabla, almacen, self.vectorial.metrica, self.puntaje)
 
     def paso(self):
         return {"op": self.tipo, "method": self.vectorial.tipo + "-" + self.vectorial.metrica,
@@ -411,6 +439,7 @@ class VectorSeqScan(Nodo):
         self.k = k
         self.metrica = metrica
         self.puntaje = puntaje
+        self.filtro = None
 
     def titulo(self):
         return "Seq Scan on " + self.tabla.name
@@ -422,11 +451,18 @@ class VectorSeqScan(Nodo):
         salida = ["Similarity: exact k=" + str(self.k), "Metric: " + self.metrica]
         if self.nota is not None:
             salida.append("Note: " + self.nota)
+        if self.filtro is not None:
+            salida.append("Refill: x" + str(FACTOR_VENTANA) + " until k rows pass " + self.filtro.texto)
         return salida
 
+    def _buscar(self, ventana):
+        return knn_exacto(self.consulta, self.almacen.matriz(), ventana, self.metrica, self.almacen.ids_vivos())
+
     def producir(self):
-        pares = knn_exacto(self.consulta, self.almacen.matriz(), self.k, self.metrica, self.almacen.ids_vivos())
-        yield from _filas_vectoriales(self.tabla, self.almacen, pares, self.metrica, self.puntaje)
+        if self.filtro is None:
+            yield from _filas_vectoriales(self.tabla, self.almacen, self._buscar(self.k), self.metrica, self.puntaje)
+            return
+        yield from _filas_filtradas(self._buscar, len(self.almacen), self.k, self.filtro, self.tabla, self.almacen, self.metrica, self.puntaje)
 
     def paso(self):
         return {"op": self.tipo, "method": "exact-" + self.metrica, "detail": self.tabla.name + " k=" + str(self.k)}

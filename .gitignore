@@ -34,3 +34,7 @@ data/modelos/audio_msd/*
 data/modelos/audio_mfcc/*
 !data/modelos/audio_mfcc/vocabulary.json
 !data/modelos/audio_mfcc/training.json
+
+# App RAG: entorno y credenciales locales
+rag/.venv
+rag/.env
