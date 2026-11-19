@@ -8,7 +8,9 @@
     "dev": "mprocs",
     "dev:backend": "backend/.venv/bin/uvicorn api.main:app --app-dir backend --reload --port 8000",
     "dev:frontend": "pnpm --dir frontend dev",
-    "build": "pnpm --dir frontend build"
+    "build": "pnpm --dir frontend build",
+    "setup:rag": "uv venv rag/.venv --python 3.12 && uv pip install --python rag/.venv/bin/python --index-strategy unsafe-best-match -r rag/requirements.txt",
+    "dev:rag": "cd rag && .venv/bin/uvicorn servidor:app --port 8100"
   },
   "devDependencies": {
     "mprocs": "^0.9.6"
