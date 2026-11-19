@@ -1,0 +1,13 @@
+{
+  "umbral": 0.34,
+  "umbral_cache": 0.44,
+  "fotos_calibracion": 5,
+  "umbral_inicial": 0.4,
+  "acierto_1_fotos": 0.9939,
+  "rechazo_1_fotos": 0.996,
+  "acierto_3_fotos": 0.9983,
+  "rechazo_3_fotos": 0.997,
+  "acierto_5_fotos": 0.9973,
+  "rechazo_5_fotos": 1.0,
+  "acierto_5_fotos_con_umbral_cache": 0.9964
+}

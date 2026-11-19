@@ -1,0 +1,3 @@
+cache,eventos,respondidas_por_cache,errores_desde_cache,exactitud,mediana_ms,p95_ms,promedio_ms
+sin,1000,0.0,0,0.999,5.6,6.811,5.69
+con,1000,0.769,0,0.999,0.509,6.64,1.838
