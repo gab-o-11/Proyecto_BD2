@@ -118,7 +118,7 @@ const estilos = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  foto: { ...StyleSheet.absoluteFillObject },
+  foto: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
   numero: { color: colores.tenue, fontSize: 28, fontWeight: '700' },
   pie: {
     position: 'absolute',
