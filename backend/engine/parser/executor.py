@@ -430,6 +430,7 @@ class Executor(Visitor):
                 if parte is not similar:
                     resto.append(parte)
             predicado, seleccion = self._predicado(tabla, resto[0] if len(resto) == 1 else And(tuple(resto)))
+            raiz.filtro = predicado
             raiz = planner.filtrar(raiz, predicado, selectividad=seleccion)
         return raiz, tabla
 
