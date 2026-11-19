@@ -993,3 +993,14 @@ body {
 .media-card .ruta {
   color: var(--muted);
 }
+
+.barra-score {
+  height: 4px;
+  background: var(--border-light);
+}
+
+.barra-score span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}

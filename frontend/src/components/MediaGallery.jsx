@@ -59,6 +59,14 @@ export default function MediaGallery({ table, consulta }) {
   const otras = table.rows.filter((r) => r[columna] !== rutaConsulta)
   const aciertos = marcar ? otras.filter((r) => r[columnaEtiqueta] === etiquetaConsulta).length : 0
   const filas = table.rows.slice(0, MAXIMO)
+  const metrica = /METRIC\s*=\s*(\w+)/i.exec(consulta || '')?.[1]?.toLowerCase()
+  const absoluta = metrica === 'cosine'
+  const valorScore = (r) => {
+    const v = columnaScore ? r[columnaScore] : null
+    return v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v)
+  }
+  const mejor = Math.max(0, ...filas.map(valorScore).filter((v) => v !== null))
+  const proporcion = (v) => Math.min(1, Math.max(0, absoluta ? v : mejor > 0 ? v / mejor : 0))
 
   return (
     <div className="galeria">
@@ -90,6 +98,16 @@ export default function MediaGallery({ table, consulta }) {
             return (
               <figure key={i} className={clase.filter(Boolean).join(' ')}>
                 {esMultimedia(ruta) ? <Vista key={ruta} ruta={ruta} /> : <div className="media-falla">sin archivo</div>}
+                {valorScore(r) !== null && (
+                  <div
+                    className="barra-score"
+                    title={absoluta
+                      ? `coseno ${Math.round(valorScore(r) * 100)} %`
+                      : `${Math.round(proporcion(valorScore(r)) * 100)} % del mejor resultado`}
+                  >
+                    <span style={{ width: `${Math.round(proporcion(valorScore(r)) * 100)}%` }} />
+                  </div>
+                )}
                 <figcaption>
                   <span className="pos">#{i + 1}</span>
                   {columnaScore && r[columnaScore] !== null && r[columnaScore] !== undefined && (
