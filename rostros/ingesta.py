@@ -9,6 +9,7 @@ import cliente_bd as bd
 import descargas
 import esquema
 import lfw
+from cache import Cache
 from config import (
     ARCHIVO_EMBEDDINGS, CARPETA_FOTOS, CARPETA_IMPORTAR, CARPETA_PROPIAS, DIMENSION, LARGO_NOMBRE, LOTE_INSERT,
     TABLA_PERSONAS, TABLA_ROSTROS,
@@ -180,6 +181,7 @@ def main():
     if argumentos.reiniciar:
         esquema.borrar()
         shutil.rmtree(CARPETA_PROPIAS, ignore_errors=True)
+        Cache().limpiar()
     esquema.crear_tablas()
     guardar_fotos(rostros)
     insertar_por_lotes(TABLA_PERSONAS, personas, fila_persona, LOTE_INSERT * 5)
