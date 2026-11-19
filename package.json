@@ -10,7 +10,8 @@
     "dev:frontend": "pnpm --dir frontend dev",
     "build": "pnpm --dir frontend build",
     "setup:rag": "uv venv rag/.venv --python 3.12 && uv pip install --python rag/.venv/bin/python --index-strategy unsafe-best-match -r rag/requirements.txt",
-    "dev:rag": "cd rag && .venv/bin/uvicorn servidor:app --port 8100"
+    "dev:rag": "cd rag && .venv/bin/uvicorn servidor:app --port 8100",
+    "setup:rostros": "uv venv rostros/.venv --python 3.12 && uv pip install --python rostros/.venv/bin/python -r rostros/requirements.txt"
   },
   "devDependencies": {
     "mprocs": "^0.9.6"

@@ -38,3 +38,6 @@ data/modelos/audio_mfcc/*
 # App RAG: entorno y credenciales locales
 rag/.venv
 rag/.env
+
+# App de rostros: entorno local
+rostros/.venv
