@@ -6,6 +6,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import MisRostros from './src/MisRostros';
 import Persona from './src/Persona';
 import Reconocer from './src/Reconocer';
+import Registrar from './src/Registrar';
 import { colores } from './src/tema';
 
 function Pestana({ titulo, activa, onPress }) {
@@ -30,8 +31,15 @@ export default function App() {
   let contenido = <Reconocer />;
   if (pestana === 'rostros' && pantalla.tipo === 'persona') {
     contenido = <Persona id={pantalla.id} onVolver={volverALista} />;
+  } else if (pestana === 'rostros' && pantalla.tipo === 'registrar') {
+    contenido = <Registrar onCancelar={volverALista} onListo={volverALista} onProbar={() => irA('reconocer')} />;
   } else if (pestana === 'rostros') {
-    contenido = <MisRostros onAbrir={(id) => setPantalla({ tipo: 'persona', id })} />;
+    contenido = (
+      <MisRostros
+        onAbrir={(id) => setPantalla({ tipo: 'persona', id })}
+        onRegistrar={() => setPantalla({ tipo: 'registrar' })}
+      />
+    );
   }
 
   return (
