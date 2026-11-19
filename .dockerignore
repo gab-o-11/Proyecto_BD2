@@ -9,3 +9,5 @@ data/demo
 **/.venv
 **/__pycache__
 *.pdf
+data/rag
+rag/.env
