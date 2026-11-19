@@ -871,3 +871,125 @@ body {
   display: flex;
   gap: 4px;
 }
+
+.vista-toggle {
+  margin-left: auto;
+  display: flex;
+  gap: 2px;
+  font-weight: normal;
+}
+
+.galeria {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px;
+}
+
+.galeria-cuerpo {
+  flex: 1;
+  min-width: 240px;
+}
+
+.galeria-resumen {
+  margin: 0 0 6px;
+  color: var(--muted);
+}
+
+.galeria-resultados {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+  gap: 8px;
+}
+
+.media-card {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-light);
+  background: var(--panel);
+  min-width: 0;
+}
+
+.media-card img,
+.media-falla {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  background: var(--gridhead);
+}
+
+.media-card img.pixelada {
+  image-rendering: pixelated;
+}
+
+.media-card audio {
+  width: 100%;
+  min-width: 0;
+}
+
+.media-falla {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.media-card figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 6px;
+  padding: 3px 5px;
+  font-size: 11px;
+}
+
+.media-card.consulta {
+  flex: none;
+  width: 168px;
+  border: 2px solid var(--accent);
+}
+
+.media-card.propia {
+  border-color: var(--accent);
+}
+
+.media-card.acierto {
+  border: 2px solid #1e8e4f;
+}
+
+.media-card.fallo {
+  border: 2px solid #c0392b;
+}
+
+.media-card .pos {
+  font-weight: 600;
+}
+
+.media-card .score {
+  font-family: "Consolas", "Courier New", monospace;
+  color: var(--accent-dark);
+}
+
+.media-card .marca.acierto {
+  color: #1e8e4f;
+  font-weight: 600;
+}
+
+.media-card .marca.fallo {
+  color: #c0392b;
+  font-weight: 600;
+}
+
+.media-card .etiqueta,
+.media-card .ruta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.media-card .ruta {
+  color: var(--muted);
+}
