@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG SciELO</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="barra">
+    <div class="marca">
+      <strong>RAG SciELO</strong>
+      <span id="estado" class="estado">conectando…</span>
+    </div>
+    <div class="controles">
+      <div class="segmentado" role="radiogroup" aria-label="Modo de búsqueda">
+        <button type="button" data-modo="bm25" role="radio">BM25</button>
+        <button type="button" data-modo="vectorial" role="radio">Embeddings</button>
+        <button type="button" data-modo="hibrido" role="radio" class="activo">Híbrido</button>
+      </div>
+      <label class="campo">País
+        <select id="pais"><option value="">Todos</option></select>
+      </label>
+      <label class="campo">Fuentes
+        <select id="k">
+          <option>3</option><option selected>5</option><option>8</option>
+        </select>
+      </label>
+      <button type="button" id="nuevo" class="secundario">Nueva conversación</button>
+    </div>
+  </header>
+
+  <main class="contenido">
+    <section class="chat">
+      <div id="mensajes" class="mensajes">
+        <div class="bienvenida">
+          <h1>Pregunta sobre artículos científicos de SciELO</h1>
+          <p>Las respuestas salen solo de los artículos indexados en el motor BD2 y citan sus fuentes.</p>
+          <div class="ejemplos">
+            <button type="button">¿Qué factores se asocian a la obesidad infantil?</button>
+            <button type="button">¿Cómo se evalúa la maloclusión con tomografía?</button>
+            <button type="button">¿Qué especies invasoras se reportan en Colombia?</button>
+          </div>
+        </div>
+      </div>
+      <form id="formulario" class="entrada">
+        <textarea id="pregunta" rows="2" placeholder="Escribe tu pregunta…" required></textarea>
+        <button type="submit" id="enviar">Preguntar</button>
+      </form>
+    </section>
+
+    <aside class="panel-fuentes">
+      <div class="panel-cabecera">
+        <h2>Fuentes</h2>
+        <span id="tiempos" class="tiempos"></span>
+      </div>
+      <div id="fuentes" class="fuentes">
+        <p class="vacio">Aquí aparecen los fragmentos recuperados para cada respuesta.</p>
+      </div>
+    </aside>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
