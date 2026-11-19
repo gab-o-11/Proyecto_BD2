@@ -313,12 +313,27 @@ def _busquedas():
         resultado = _ejecutar(executor, f"SELECT id FROM img WHERE SIMILAR_TO({q}, k=500) USING SEQ;")
         assert len(resultado["rows"]) == 200
         resultado = _ejecutar(executor, f"SELECT id, grupo FROM img WHERE grupo = 1 AND SIMILAR_TO({q}, k=10) USING SEQ;")
-        todos = _ejecutar(executor, f"SELECT id, grupo FROM img WHERE SIMILAR_TO({q}, k=10) USING SEQ;")
+        todos = _ejecutar(executor, f"SELECT id, grupo FROM img WHERE SIMILAR_TO({q}, k=200) USING SEQ;")
         cumplen = []
         for fila in todos["rows"]:
             if fila["grupo"] == 1:
                 cumplen.append(fila["id"])
-        assert _ids(resultado) == cumplen and len(cumplen) < 10 and "Filter" in _plan(resultado)
+        assert _ids(resultado) == cumplen[:10] and "Filter" in _plan(resultado)
+        primeros = _ejecutar(executor, f"SELECT id, grupo FROM img WHERE SIMILAR_TO({q}, k=10) USING SEQ;")
+        sin_relleno = 0
+        for fila in primeros["rows"]:
+            if fila["grupo"] == 1:
+                sin_relleno += 1
+        assert sin_relleno < 10
+        resultado = _ejecutar(executor, f"SELECT id, grupo FROM img WHERE grupo = 2 AND SIMILAR_TO({q}, k=10) USING HNSW WITH METRIC=cosine;")
+        grupos = set()
+        for fila in resultado["rows"]:
+            grupos.add(fila["grupo"])
+        assert len(resultado["rows"]) == 10 and grupos == {2} and "Vector Index Scan" in _plan(resultado)
+        resultado = _ejecutar(executor, f"SELECT id FROM img WHERE grupo = 9 AND SIMILAR_TO({q}, k=10) USING SEQ;")
+        assert resultado["rows"] == []
+        texto = _texto_plan(_ejecutar(executor, f"EXPLAIN SELECT id FROM img WHERE grupo = 1 AND SIMILAR_TO({q}, k=10) USING SEQ;"))
+        assert "Refill" in texto, texto
         _ejecutar(executor, "DROP INDEX h_cosine;")
         resultado = _ejecutar(executor, f"SELECT id FROM img WHERE SIMILAR_TO({q}, k=3) USING HNSW WITH METRIC=cosine;")
         assert "Seq Scan" in _plan(resultado) and "Vector Index Scan" not in _plan(resultado)
