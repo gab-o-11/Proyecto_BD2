@@ -70,6 +70,26 @@ pnpm dev:rag
 
 Abre http://localhost:8100. `pnpm dev` levanta el motor, el frontend y el RAG juntos.
 
+## Docker
+
+El RAG es un servicio opcional del `docker-compose.yml` (profile `rag`). `docker compose up` sigue
+levantando solo el motor y el frontend.
+
+```bash
+cp rag/.env.example rag/.env
+docker compose --profile rag up -d --build
+docker compose --profile rag run --rm rag python ingesta.py
+```
+
+Abre http://localhost:8100.
+
+- El motor de Docker guarda sus tablas en el volumen `runtime`, aparte de `data/runtime`, así que la ingesta
+  se corre una vez dentro de Docker.
+- `data/rag` se monta en el contenedor: si ya están el dataset y los embeddings, la ingesta los reutiliza
+  y tarda unos minutos. Si no, los descarga y los calcula (cerca de una hora en CPU).
+- El modelo de embeddings se descarga al primer arranque y queda en el volumen `hf_cache`.
+- La clave se lee de `rag/.env` en tiempo de ejecución. No entra en la imagen.
+
 ## Evaluación
 
 ```bash
