@@ -1,4 +1,5 @@
 import Constants from 'expo-constants';
+import { File } from 'expo-file-system';
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 
 function urlServicio() {
@@ -46,19 +47,15 @@ async function pedir(ruta, opciones = {}, limite = 15000) {
   }
 }
 
-function archivo(uri, nombre) {
-  return { uri, name: nombre, type: 'image/jpeg' };
-}
-
 function formularioDeFotos(uris) {
   const formulario = new FormData();
-  uris.forEach((uri, indice) => formulario.append('fotos', archivo(uri, `foto${indice + 1}.jpg`)));
+  uris.forEach((uri) => formulario.append('fotos', new File(uri)));
   return formulario;
 }
 
 export function reconocer(uri, usarCache) {
   const formulario = new FormData();
-  formulario.append('imagen', archivo(uri, 'cuadro.jpg'));
+  formulario.append('imagen', new File(uri));
   return pedir(`/reconocer?cache=${usarCache}`, { method: 'POST', body: formulario }, 3000);
 }
 
