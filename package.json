@@ -10,7 +10,11 @@
     "dev:frontend": "pnpm --dir frontend dev",
     "build": "pnpm --dir frontend build",
     "setup:rag": "uv venv rag/.venv --python 3.12 && uv pip install --python rag/.venv/bin/python --index-strategy unsafe-best-match -r rag/requirements.txt",
-    "dev:rag": "cd rag && .venv/bin/uvicorn servidor:app --port 8100"
+    "dev:rag": "cd rag && .venv/bin/uvicorn servidor:app --port 8100",
+    "setup:rostros": "uv venv rostros/.venv --python 3.12 && uv pip install --python rostros/.venv/bin/python -r rostros/requirements.txt",
+    "dev:redis": "docker run --rm --name bd2-redis -p 127.0.0.1:6379:6379 redis:7-alpine",
+    "dev:rostros": "cd rostros && .venv/bin/uvicorn servidor:app --host 0.0.0.0 --port 8200",
+    "dev:rostros-app": "pnpm --dir rostros/app start"
   },
   "devDependencies": {
     "mprocs": "^0.9.6"

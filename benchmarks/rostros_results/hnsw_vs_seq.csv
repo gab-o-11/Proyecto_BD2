@@ -1,0 +1,3 @@
+metodo,motor_mediana_ms,motor_p95_ms,http_mediana_ms,http_p95_ms,top1_igual_a_seq
+HNSW,3.4,5.8,5.13,7.57,1.0
+SEQ,24.25,45.52,27.7,50.86,1.0
