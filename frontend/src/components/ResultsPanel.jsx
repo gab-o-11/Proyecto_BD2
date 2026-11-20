@@ -1,3 +1,6 @@
+import { useState } from 'react'
+import MediaGallery, { columnasMultimedia } from './MediaGallery'
+
 function lastTable(statements) {
   for (let i = statements.length - 1; i >= 0; i--) {
     if (statements[i].columns) return statements[i]
@@ -5,14 +8,25 @@ function lastTable(statements) {
   return null
 }
 
-export default function ResultsPanel({ result }) {
+export default function ResultsPanel({ result, consulta }) {
+  const [modo, setModo] = useState('galeria')
   const statements = result && result.statements ? result.statements : []
   const table = statements.length > 0 ? lastTable(statements) : (result && result.columns ? result : null)
   const messages = statements.filter((s) => s.message).map((s) => s.message)
   const isTable = !result?.error && table
+  const hayGaleria = Boolean(isTable) && columnasMultimedia(table).length > 0
+  const verGaleria = hayGaleria && modo === 'galeria'
   return (
     <section className="panel results">
-      <h2>Resultados</h2>
+      <h2>
+        Resultados
+        {hayGaleria && (
+          <span className="vista-toggle">
+            <button className={verGaleria ? 'tab active' : 'tab'} onClick={() => setModo('galeria')}>Galería</button>
+            <button className={verGaleria ? 'tab' : 'tab active'} onClick={() => setModo('tabla')}>Tabla</button>
+          </span>
+        )}
+      </h2>
       <div className="panel-body flush">
         {!result ? (
           <p className="muted" style={{ padding: '6px 8px' }}>Ejecuta una consulta.</p>
@@ -23,6 +37,8 @@ export default function ResultsPanel({ result }) {
             {messages.length > 0 && messages.map((m, i) => <p key={i} className="ok">{m}</p>)}
             {!isTable && messages.length > 0 ? null : !isTable ? (
               <p className="muted" style={{ padding: '6px 8px' }}>Sin filas.</p>
+            ) : verGaleria ? (
+              <MediaGallery table={table} consulta={consulta} />
             ) : (
               <table className="grid-table">
                 <thead>

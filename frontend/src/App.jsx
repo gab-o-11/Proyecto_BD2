@@ -109,7 +109,7 @@ export default function App() {
                 <button className={vista === 'plan' ? 'tab active' : 'tab'} onClick={() => setVista('plan')}>Plan</button>
                 <button className={vista === 'indices' ? 'tab active' : 'tab'} onClick={() => setVista('indices')}>Índices</button>
               </div>
-              {vista === 'resultados' && <ResultsPanel result={result} />}
+              {vista === 'resultados' && <ResultsPanel result={result} consulta={ultimaConsulta} />}
               {vista === 'plan' && <ExplainTree result={result} />}
               {vista === 'indices' && <IndexPanel tables={tables} result={result} onRectangulos={setRectangulos} />}
             </div>

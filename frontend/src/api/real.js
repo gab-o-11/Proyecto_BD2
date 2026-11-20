@@ -108,3 +108,7 @@ export async function reiniciarBase() {
     return { error: String(error) }
   }
 }
+
+export function urlArchivo(ruta) {
+  return `/api/multimedia/archivo?${new URLSearchParams({ ruta })}`
+}

@@ -1,8 +1,9 @@
 import os
 import time
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from engine.catalog import create_catalog, table_info, vaciar_catalogo
@@ -13,6 +14,7 @@ from engine.transactions import LockError, LockMode, Resource, TransactionError,
 from engine.catalog import STRLEN, StorageTable, tabla_que_choca
 from engine.importer import ID_SERIAL, CSVImportError, agregar_id, parse_csv
 from engine.multimedia.pipeline import FeaturePipeline
+from engine.multimedia.previsualizacion import FormatoNoPrevisualizable, archivo_previsualizable
 
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT_DIR = os.path.dirname(BACKEND_DIR)
@@ -92,6 +94,16 @@ def health():
 @app.get("/api/multimedia/models")
 def modelos_multimedia():
     return {"models": multimedia.modelos()}
+
+@app.get("/api/multimedia/archivo")
+def archivo_multimedia(ruta: str):
+    try:
+        completa, tipo = archivo_previsualizable(MULTIMEDIA_DIR, ruta)
+    except FormatoNoPrevisualizable as error:
+        raise HTTPException(status_code=415, detail=str(error))
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    return FileResponse(completa, media_type=tipo)
 
 
 @app.get("/api/tables")
