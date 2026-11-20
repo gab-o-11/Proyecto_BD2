@@ -24,12 +24,16 @@ function nombreArchivo(ruta) {
   return ruta.split('/').pop()
 }
 
+function titulo(ruta) {
+  return nombreArchivo(ruta).replace(/\.[^.]+$/, '').replace(/_/g, ' ')
+}
+
 function Vista({ ruta }) {
   const [falla, setFalla] = useState(false)
   const [pixelada, setPixelada] = useState(false)
   if (falla) return <div className="media-falla">sin vista previa</div>
   if (AUDIO.test(ruta)) {
-    return <audio controls preload="none" src={urlArchivo(ruta)} onError={() => setFalla(true)} />
+    return <audio controls preload="metadata" src={urlArchivo(ruta)} onError={() => setFalla(true)} />
   }
   return (
     <img
@@ -59,6 +63,7 @@ export default function MediaGallery({ table, consulta }) {
   const otras = table.rows.filter((r) => r[columna] !== rutaConsulta)
   const aciertos = marcar ? otras.filter((r) => r[columnaEtiqueta] === etiquetaConsulta).length : 0
   const filas = table.rows.slice(0, MAXIMO)
+  const modoAudio = table.rows.some((r) => typeof r[columna] === 'string' && AUDIO.test(r[columna]))
   const metrica = /METRIC\s*=\s*(\w+)/i.exec(consulta || '')?.[1]?.toLowerCase()
   const absoluta = metrica === 'cosine'
   const valorScore = (r) => {
@@ -69,14 +74,14 @@ export default function MediaGallery({ table, consulta }) {
   const proporcion = (v) => Math.min(1, Math.max(0, absoluta ? v : mejor > 0 ? v / mejor : 0))
 
   return (
-    <div className="galeria">
+    <div className={modoAudio ? 'galeria audio' : 'galeria'}>
       {rutaConsulta && (
         <figure className="media-card consulta">
           <Vista key={rutaConsulta} ruta={rutaConsulta} />
           <figcaption>
             <strong>Consulta</strong>
             {marcar && <span>{String(etiquetaConsulta)}</span>}
-            <span className="ruta" title={rutaConsulta}>{nombreArchivo(rutaConsulta)}</span>
+            <span className="ruta" title={rutaConsulta}>{modoAudio ? titulo(rutaConsulta) : nombreArchivo(rutaConsulta)}</span>
           </figcaption>
         </figure>
       )}
@@ -110,6 +115,7 @@ export default function MediaGallery({ table, consulta }) {
                 )}
                 <figcaption>
                   <span className="pos">#{i + 1}</span>
+                  {modoAudio && <span className="titulo" title={ruta}>{titulo(ruta)}</span>}
                   {columnaScore && r[columnaScore] !== null && r[columnaScore] !== undefined && (
                     <span className="score" title={columnaScore}>{Number(r[columnaScore]).toFixed(3)}</span>
                   )}

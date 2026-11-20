@@ -1004,3 +1004,59 @@ body {
   height: 100%;
   background: var(--accent);
 }
+
+.galeria.audio {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.galeria.audio .media-card.consulta {
+  width: auto;
+}
+
+.galeria.audio .galeria-resultados {
+  grid-template-columns: 1fr;
+}
+
+.galeria.audio .media-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 1.5fr);
+  grid-template-areas:
+    "texto reproductor"
+    "barra barra";
+  align-items: center;
+  column-gap: 8px;
+}
+
+.galeria.audio .media-card figcaption {
+  grid-area: texto;
+}
+
+.galeria.audio .media-card audio,
+.galeria.audio .media-card .media-falla {
+  grid-area: reproductor;
+  height: 40px;
+  aspect-ratio: auto;
+}
+
+.galeria.audio .barra-score {
+  grid-area: barra;
+}
+
+.media-card .titulo {
+  font-weight: 600;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .galeria.audio .media-card {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "texto"
+      "reproductor"
+      "barra";
+  }
+}
